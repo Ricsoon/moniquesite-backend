@@ -1,0 +1,300 @@
+const express = require('express');
+const router = express.Router();
+const passport = require('passport');
+const axios = require('axios');
+const User = require('../models/User');
+const planPostgresService = require('../services/planPostgresService');
+const { generateAccessToken, generateRefreshToken } = require('../utils/jwt');
+const { authenticate } = require('../middleware/auth');
+
+// Inicializar Passport
+require('../config/passport');
+
+// @route   GET /api/auth/google
+// @desc    Iniciar autenticação com Google
+// @access  Public
+router.get(
+  '/google',
+  passport.authenticate('google', {
+    scope: ['profile', 'email'],
+  })
+);
+
+// @route   GET /api/auth/google/callback
+// @desc    Callback do Google OAuth
+// @access  Public
+router.get(
+  '/google/callback',
+  passport.authenticate('google', { session: false, failureRedirect: '/login?error=auth_failed' }),
+  async (req, res) => {
+    try {
+      const user = req.user;
+
+      if (!user || !user.isActive) {
+        const frontendUrl = process.env.FRONTEND_URL || (process.env.NODE_ENV === 'production' ? 'http://localhost:80' : 'http://localhost:3000');
+        return res.redirect(`${frontendUrl}/auth/callback?error=user_inactive`);
+      }
+
+      // Gerar tokens JWT
+      const accessToken = generateAccessToken(user._id);
+      const refreshToken = generateRefreshToken(user._id);
+
+      // Redirecionar para o frontend com tokens
+      const frontendUrl = process.env.FRONTEND_URL || (process.env.NODE_ENV === 'production' ? 'http://localhost:80' : 'http://localhost:3000');
+      const redirectUrl = `${frontendUrl}/auth/callback?token=${accessToken}&refreshToken=${refreshToken}`;
+
+      res.redirect(redirectUrl);
+    } catch (error) {
+      console.error('Erro no callback do Google:', error);
+      const frontendUrl = process.env.FRONTEND_URL || (process.env.NODE_ENV === 'production' ? 'http://localhost:80' : 'http://localhost:3000');
+      res.redirect(`${frontendUrl}/auth/callback?error=server_error`);
+    }
+  }
+);
+
+// @route   POST /api/auth/google/token
+// @desc    Obter tokens JWT após autenticação Google (alternativa ao redirect)
+// @access  Public
+router.post('/google/token', async (req, res) => {
+  try {
+    const { googleToken } = req.body;
+
+    if (!googleToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token do Google é obrigatório',
+      });
+    }
+
+    // Verificar token do Google (usando Google API)
+    const googleResponse = await axios.get(`https://www.googleapis.com/oauth2/v3/userinfo`, {
+      headers: {
+        Authorization: `Bearer ${googleToken}`,
+      },
+    });
+
+    const googleUser = googleResponse.data;
+
+    // Buscar ou criar usuário
+    let user = await User.findOne({ googleId: googleUser.sub });
+
+    if (!user) {
+      // Verificar se existe pelo email
+      user = await User.findOne({ email: googleUser.email });
+
+      if (user) {
+        // Adicionar googleId ao usuário existente
+        user.googleId = googleUser.sub;
+        if (googleUser.picture) {
+          user.picture = googleUser.picture;
+        }
+        await user.save();
+      } else {
+        // Criar novo usuário
+        const freePlan = await planPostgresService.findPlanByName('Gratuito');
+
+        user = new User({
+          googleId: googleUser.sub,
+          name: googleUser.name,
+          email: googleUser.email,
+          picture: googleUser.picture || null,
+          isActive: true,
+        });
+
+        // Atribuir plano gratuito
+        // Nota: Planos estão no Postgres (ID numérico), User está no MongoDB (usa string)
+        // Converter ID numérico do Postgres para string para compatibilidade com User
+        if (freePlan) {
+          user.activePlan = freePlan.id.toString(); // Converter ID numérico para string
+          user.planStartDate = new Date();
+          const endDate = new Date();
+          endDate.setMonth(endDate.getMonth() + 1);
+          user.planEndDate = endDate;
+          user.credits = freePlan.credits || 200;
+          user.hasUnlimitedCredits = freePlan.isUnlimited || false;
+        } else {
+          user.credits = 200;
+          user.hasUnlimitedCredits = false;
+        }
+
+        await user.save();
+      }
+    } else {
+      // Atualizar dados se necessário
+      if (googleUser.picture && user.picture !== googleUser.picture) {
+        user.picture = googleUser.picture;
+        await user.save();
+      }
+    }
+
+    if (!user.isActive) {
+      return res.status(401).json({
+        success: false,
+        message: 'Usuário inativo. Entre em contato com o suporte.',
+      });
+    }
+
+    // Gerar tokens JWT
+    const accessToken = generateAccessToken(user._id);
+    const refreshToken = generateRefreshToken(user._id);
+
+    res.json({
+      success: true,
+      message: 'Login realizado com sucesso',
+      data: {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          picture: user.picture,
+          phone: user.phone,
+          role: user.role,
+          activePlan: user.activePlan,
+          planStartDate: user.planStartDate,
+          planEndDate: user.planEndDate,
+          credits: user.hasUnlimitedCredits ? 'unlimited' : user.credits,
+          creditsUsed: user.creditsUsed || 0,
+          hasUnlimitedCredits: user.hasUnlimitedCredits,
+        },
+        accessToken,
+        refreshToken,
+      },
+    });
+  } catch (error) {
+    console.error('Erro ao autenticar com Google:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao autenticar com Google',
+      error: error.message,
+    });
+  }
+});
+
+// @route   POST /api/auth/refresh
+// @desc    Renovar token de acesso
+// @access  Public
+router.post(
+  '/refresh',
+  async (req, res) => {
+    try {
+      const { refreshToken } = req.body;
+
+      if (!refreshToken) {
+        return res.status(400).json({
+          success: false,
+          message: 'Refresh token é obrigatório',
+        });
+      }
+
+      const { verifyRefreshToken } = require('../utils/jwt');
+      const decoded = verifyRefreshToken(refreshToken);
+
+      // Buscar usuário
+      const user = await User.findById(decoded.id);
+
+      if (!user || !user.isActive) {
+        return res.status(401).json({
+          success: false,
+          message: 'Token inválido ou usuário inativo',
+        });
+      }
+
+      // Gerar novo token de acesso
+      const accessToken = generateAccessToken(user._id);
+
+      res.json({
+        success: true,
+        data: {
+          accessToken,
+        },
+      });
+    } catch (error) {
+      res.status(401).json({
+        success: false,
+        message: 'Token de refresh inválido ou expirado',
+      });
+    }
+  }
+);
+
+// @route   GET /api/auth/me
+// @desc    Obter dados do usuário autenticado
+// @access  Private
+router.get('/me', authenticate, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    
+    // Popular activePlan do Postgres se existir
+    let activePlan = null;
+    if (user && user.activePlan) {
+      try {
+        const planId = parseInt(user.activePlan);
+        if (!isNaN(planId)) {
+          activePlan = await planPostgresService.findPlanById(planId);
+        }
+      } catch (error) {
+        console.error('Erro ao buscar plano ativo:', error);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          picture: user.picture,
+          phone: user.phone,
+          role: user.role,
+          activePlan: activePlan ? {
+            _id: activePlan._id,
+            id: activePlan.id,
+            name: activePlan.name,
+            description: activePlan.description,
+            price: activePlan.price,
+            duration: activePlan.duration,
+            durationUnit: activePlan.durationUnit,
+            features: activePlan.features,
+          } : null,
+          planStartDate: user.planStartDate,
+          planEndDate: user.planEndDate,
+          credits: user.hasUnlimitedCredits ? 'unlimited' : user.credits,
+          creditsUsed: user.creditsUsed || 0,
+          hasUnlimitedCredits: user.hasUnlimitedCredits,
+          createdAt: user.createdAt,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Erro ao buscar usuário:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao buscar dados do usuário',
+      error: error.message,
+    });
+  }
+});
+
+// @route   POST /api/auth/logout
+// @desc    Logout (apenas informativo, já que usamos JWT stateless)
+// @access  Private
+router.post('/logout', authenticate, async (req, res) => {
+  try {
+    // Com JWT stateless, o logout é feito no frontend removendo o token
+    // Este endpoint é apenas informativo
+    res.json({
+      success: true,
+      message: 'Logout realizado com sucesso. Remova o token no frontend.',
+    });
+  } catch (error) {
+    console.error('Erro ao fazer logout:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao fazer logout',
+      error: error.message,
+    });
+  }
+});
+
+module.exports = router;
