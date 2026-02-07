@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const passport = require('passport');
 const axios = require('axios');
-const User = require('../models/User');
+const userPostgresService = require('../services/userPostgresService');
 const planPostgresService = require('../services/planPostgresService');
 const { generateAccessToken, generateRefreshToken } = require('../utils/jwt');
 const { authenticate } = require('../middleware/auth');
@@ -30,14 +30,14 @@ router.get(
     try {
       const user = req.user;
 
-      if (!user || !user.isActive) {
+      if (!user || !user.is_active) {
         const frontendUrl = process.env.FRONTEND_URL || (process.env.NODE_ENV === 'production' ? 'http://localhost:80' : 'http://localhost:3000');
         return res.redirect(`${frontendUrl}/auth/callback?error=user_inactive`);
       }
 
       // Gerar tokens JWT
-      const accessToken = generateAccessToken(user._id);
-      const refreshToken = generateRefreshToken(user._id);
+      const accessToken = generateAccessToken(user.id);
+      const refreshToken = generateRefreshToken(user.id);
 
       // Redirecionar para o frontend com tokens
       const frontendUrl = process.env.FRONTEND_URL || (process.env.NODE_ENV === 'production' ? 'http://localhost:80' : 'http://localhost:3000');
@@ -76,58 +76,42 @@ router.post('/google/token', async (req, res) => {
     const googleUser = googleResponse.data;
 
     // Buscar ou criar usuário
-    let user = await User.findOne({ googleId: googleUser.sub });
+    let user = await userPostgresService.findUserByGoogleId(googleUser.sub);
 
     if (!user) {
       // Verificar se existe pelo email
-      user = await User.findOne({ email: googleUser.email });
+      user = await userPostgresService.findUserByEmail(googleUser.email);
 
       if (user) {
         // Adicionar googleId ao usuário existente
-        user.googleId = googleUser.sub;
-        if (googleUser.picture) {
-          user.picture = googleUser.picture;
-        }
-        await user.save();
-      } else {
-        // Criar novo usuário
-        const freePlan = await planPostgresService.findPlanByName('Gratuito');
-
-        user = new User({
+        user = await userPostgresService.updateUserWithGoogleData(user.id, {
           googleId: googleUser.sub,
           name: googleUser.name,
           email: googleUser.email,
-          picture: googleUser.picture || null,
-          isActive: true,
+          picture: googleUser.picture || null
         });
-
-        // Atribuir plano gratuito
-        // Nota: Planos estão no Postgres (ID numérico), User está no MongoDB (usa string)
-        // Converter ID numérico do Postgres para string para compatibilidade com User
-        if (freePlan) {
-          user.activePlan = freePlan.id.toString(); // Converter ID numérico para string
-          user.planStartDate = new Date();
-          const endDate = new Date();
-          endDate.setMonth(endDate.getMonth() + 1);
-          user.planEndDate = endDate;
-          user.credits = freePlan.credits || 200;
-          user.hasUnlimitedCredits = freePlan.isUnlimited || false;
-        } else {
-          user.credits = 200;
-          user.hasUnlimitedCredits = false;
-        }
-
-        await user.save();
+      } else {
+        // Criar novo usuário
+        user = await userPostgresService.createUserWithGoogle({
+          googleId: googleUser.sub,
+          name: googleUser.name,
+          email: googleUser.email,
+          picture: googleUser.picture || null
+        });
       }
     } else {
       // Atualizar dados se necessário
       if (googleUser.picture && user.picture !== googleUser.picture) {
-        user.picture = googleUser.picture;
-        await user.save();
+        user = await userPostgresService.updateUserWithGoogleData(user.id, {
+          googleId: googleUser.sub,
+          name: googleUser.name,
+          email: googleUser.email,
+          picture: googleUser.picture
+        });
       }
     }
 
-    if (!user.isActive) {
+    if (!user.is_active) {
       return res.status(401).json({
         success: false,
         message: 'Usuário inativo. Entre em contato com o suporte.',
@@ -135,25 +119,25 @@ router.post('/google/token', async (req, res) => {
     }
 
     // Gerar tokens JWT
-    const accessToken = generateAccessToken(user._id);
-    const refreshToken = generateRefreshToken(user._id);
+    const accessToken = generateAccessToken(user.id);
+    const refreshToken = generateRefreshToken(user.id);
 
     res.json({
       success: true,
       message: 'Login realizado com sucesso',
       data: {
         user: {
-          id: user._id,
-          name: user.name,
+          id: user.id,
+          name: user.nome,
           email: user.email,
           picture: user.picture,
-          phone: user.phone,
+          phone: user.telefone,
           role: user.role,
-          activePlan: user.activePlan,
-          planStartDate: user.planStartDate,
-          planEndDate: user.planEndDate,
-          credits: user.hasUnlimitedCredits ? 'unlimited' : user.credits,
-          creditsUsed: user.creditsUsed || 0,
+          activePlan: user.active_plan,
+          planStartDate: user.plan_start_date,
+          planEndDate: user.plan_end_date,
+          credits: user.has_unlimited_credits ? 'unlimited' : user.credits,
+          creditsUsed: user.credits_used || 0,
           hasUnlimitedCredits: user.hasUnlimitedCredits,
         },
         accessToken,

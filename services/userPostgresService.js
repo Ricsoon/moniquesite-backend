@@ -3,7 +3,7 @@ const { pool } = require('../config/postgres');
 /**
  * Criar ou atualizar usuário no PostgreSQL
  * @param {Object} userData - Dados do usuário
- * @param {string} userData.n8n_user_id - ID do usuário no N8N
+ * @param {string} userData.user_id - ID do usuário no N8N
  * @param {string} userData.email - Email do usuário
  * @param {string} userData.nome - Nome do usuário
  * @param {string} userData.telefone - Telefone do usuário
@@ -12,14 +12,14 @@ const { pool } = require('../config/postgres');
  */
 const createOrUpdateUser = async (userData) => {
   try {
-    const { n8n_user_id, email, nome, telefone, status = 'pending' } = userData;
+    const { user_id, email, nome, telefone, status = 'pending' } = userData;
 
-    // Verificar se usuário já existe pelo n8n_user_id ou email
+    // Verificar se usuário já existe pelo user_id ou email
     let existingUser = null;
-    if (n8n_user_id) {
+    if (user_id) {
       const result = await pool.query(
-        'SELECT * FROM users WHERE n8n_user_id = $1',
-        [n8n_user_id]
+        'SELECT * FROM users WHERE user_id = $1',
+        [user_id]
       );
       existingUser = result.rows[0];
     }
@@ -39,9 +39,9 @@ const createOrUpdateUser = async (userData) => {
       const values = [];
       let paramCount = 1;
 
-      if (n8n_user_id !== undefined && n8n_user_id !== null && n8n_user_id !== '') {
-        updates.push(`n8n_user_id = $${paramCount++}`);
-        values.push(n8n_user_id);
+      if (user_id !== undefined && user_id !== null && user_id !== '') {
+        updates.push(`user_id = $${paramCount++}`);
+        values.push(user_id);
       }
       if (email !== undefined && email !== null && email !== '') {
         updates.push(`email = $${paramCount++}`);
@@ -78,15 +78,15 @@ const createOrUpdateUser = async (userData) => {
       }
     } else {
       // Criar novo usuário - só insere campos que foram fornecidos
-      const fields = [];
-      const placeholders = [];
+      const fields = ['id_user_platform'];
+      const placeholders = ['gen_random_uuid()::text'];
       const values = [];
       let paramCount = 1;
 
-      if (n8n_user_id !== undefined && n8n_user_id !== null && n8n_user_id !== '') {
-        fields.push('n8n_user_id');
+      if (user_id !== undefined && user_id !== null && user_id !== '') {
+        fields.push('user_id');
         placeholders.push(`$${paramCount++}`);
-        values.push(n8n_user_id);
+        values.push(user_id);
       }
       if (email !== undefined && email !== null && email !== '') {
         fields.push('email');
@@ -109,9 +109,9 @@ const createOrUpdateUser = async (userData) => {
       placeholders.push(`$${paramCount++}`);
       values.push(status || 'pending');
 
-      // Verificar se pelo menos um identificador foi fornecido (email ou n8n_user_id)
-      if (!email && !n8n_user_id) {
-        throw new Error('Pelo menos um identificador (email ou n8n_user_id) deve ser fornecido para criar usuário');
+      // Verificar se pelo menos um identificador foi fornecido (email ou user_id)
+      if (!email && !user_id) {
+        throw new Error('Pelo menos um identificador (email ou user_id) deve ser fornecido para criar usuário');
       }
 
       const insertQuery = `
@@ -130,19 +130,19 @@ const createOrUpdateUser = async (userData) => {
 };
 
 /**
- * Buscar usuário por n8n_user_id
- * @param {string} n8nUserId - ID do usuário no N8N
+ * Buscar usuário por user_id
+ * @param {string} userId - ID do usuário no N8N
  * @returns {Promise<Object|null>} Usuário encontrado ou null
  */
-const findUserByN8nId = async (n8nUserId) => {
+const findUserByUserId = async (userId) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM users WHERE n8n_user_id = $1',
-      [n8nUserId]
+      'SELECT * FROM users WHERE user_id = $1',
+      [userId]
     );
     return result.rows[0] || null;
   } catch (error) {
-    console.error('Erro ao buscar usuário por N8N ID:', error);
+    console.error('Erro ao buscar usuário por user ID:', error);
     throw error;
   }
 };
@@ -223,12 +223,84 @@ const updateUserStatus = async (id, status) => {
   }
 };
 
+/**
+ * Buscar usuário por Google ID
+ * @param {string} googleId - Google ID do usuário
+ * @returns {Promise<Object|null>} Usuário encontrado ou null
+ */
+const findUserByGoogleId = async (googleId) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE google_id = $1',
+      [googleId]
+    );
+    return result.rows[0] || null;
+  } catch (error) {
+    console.error('Erro ao buscar usuário por Google ID:', error);
+    throw error;
+  }
+};
+
+/**
+ * Atualizar usuário com informações do Google OAuth
+ * @param {number} userId - ID do usuário
+ * @param {Object} googleData - Dados do Google (googleId, name, picture, email)
+ * @returns {Promise<Object>} Usuário atualizado
+ */
+const updateUserWithGoogleData = async (userId, googleData) => {
+  try {
+    const { googleId, name, picture, email } = googleData;
+    
+    const result = await pool.query(
+      `UPDATE users 
+       SET google_id = $1, 
+           nome = COALESCE($2, nome),
+           picture = COALESCE($3, picture),
+           email = COALESCE($4, email),
+           is_active = true,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $5
+       RETURNING *`,
+      [googleId, name, picture, email, userId]
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error('Erro ao atualizar usuário com dados do Google:', error);
+    throw error;
+  }
+};
+
+/**
+ * Criar novo usuário com dados do Google OAuth
+ * @param {Object} userData - Dados do usuário (googleId, name, email, picture)
+ * @returns {Promise<Object>} Usuário criado
+ */
+const createUserWithGoogle = async (userData) => {
+  try {
+    const { googleId, name, email, picture } = userData;
+    
+    const result = await pool.query(
+      `INSERT INTO users (google_id, nome, email, picture, status, is_active, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'active', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING *`,
+      [googleId, name, email, picture || null]
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error('Erro ao criar usuário com Google OAuth:', error);
+    throw error;
+  }
+};
+
 module.exports = {
   createOrUpdateUser,
-  findUserByN8nId,
+  findUserByUserId,
   findUserByEmail,
   findUserByPhone,
   findUserById,
   updateUserStatus,
+  findUserByGoogleId,
+  updateUserWithGoogleData,
+  createUserWithGoogle,
 };
 

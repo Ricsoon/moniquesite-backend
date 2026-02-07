@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const config = require('../config/config');
-const User = require('../models/User');
+const userPostgresService = require('../services/userPostgresService');
 
 // Middleware para verificar token JWT
 const authenticate = async (req, res, next) => {
@@ -19,7 +19,7 @@ const authenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, config.jwtSecret);
 
     // Buscar usuário
-    const user = await User.findById(decoded.id).select('-password');
+    const user = await userPostgresService.findUserById(decoded.id);
 
     if (!user) {
       return res.status(401).json({
@@ -28,7 +28,7 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    if (!user.isActive) {
+    if (!user.is_active) {
       return res.status(401).json({
         success: false,
         message: 'Usuário inativo.',

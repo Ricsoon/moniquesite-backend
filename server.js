@@ -4,7 +4,7 @@ const morgan = require('morgan');
 const session = require('express-session');
 const config = require('./config/config');
 const connectDB = require('./config/database');
-const { testConnection, initializeTables } = require('./config/postgres');
+const { testConnection, initializeTables, addAuthColumnsIfNeeded } = require('./config/postgres');
 const passport = require('passport');
 
 // Importar rotas
@@ -14,19 +14,22 @@ const planRoutes = require('./routes/plans');
 const transactionRoutes = require('./routes/transactions');
 const webhookRoutes = require('./routes/webhooks');
 const creditsRoutes = require('./routes/credits');
-const supabaseRoutes = require('./routes/supabase');
+// const supabaseRoutes = require('./routes/supabase'); // Temporariamente comentado para testar contato
 
 // Inicializar app
 const app = express();
 
 // Conectar e inicializar PostgreSQL (banco de dados principal)
+// Executar migração de autenticação para PostgreSQL
 (async () => {
   const connected = await testConnection();
   if (connected) {
     await initializeTables();
+    await addAuthColumnsIfNeeded();
   } else {
     console.error('❌ Falha ao conectar ao PostgreSQL. A aplicação pode não funcionar corretamente.');
-    process.exit(1);
+    console.log('⚠️  Continuando sem conexão com PostgreSQL para testes...');
+    // process.exit(1); // Removido para permitir testes sem banco
   }
 })();
 
@@ -67,7 +70,7 @@ app.use('/api/plans', planRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/credits', creditsRoutes);
-app.use('/api/supabase', supabaseRoutes);
+// app.use('/api/supabase', supabaseRoutes); // Temporariamente comentado para testar contato
 
 // Rota de teste
 app.get('/', (req, res) => {
@@ -83,10 +86,18 @@ app.get('/', (req, res) => {
       webhooks: '/api/webhooks',
       credits: '/api/credits',
       supabase: '/api/supabase',
+      health: '/health',
     },
   });
 });
-
+// Rota de health check
+  app.get('/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Servidor está saudável',
+    timestamp: new Date().toISOString(),
+  });
+});
 // Rota 404
 app.use((req, res) => {
   res.status(404).json({

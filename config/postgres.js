@@ -121,10 +121,78 @@ const initializeTables = async () => {
     throw error;
   }
 };
+// Adicionar colunas de autenticação se não existirem
+const addAuthColumnsIfNeeded = async () => {
+  try {
+    // Adicionar coluna google_id
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS google_id VARCHAR(255) UNIQUE
+    `);
+
+    // Adicionar coluna is_active
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true
+    `);
+
+    // Adicionar coluna picture
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS picture VARCHAR(500)
+    `);
+
+    // Adicionar coluna active_plan
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS active_plan INTEGER REFERENCES plans(id)
+    `);
+
+    // Adicionar coluna credits
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS credits INTEGER DEFAULT 200
+    `);
+
+    // Adicionar coluna has_unlimited_credits
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS has_unlimited_credits BOOLEAN DEFAULT false
+    `);
+
+    // Adicionar coluna credits_used
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS credits_used INTEGER DEFAULT 0
+    `);
+
+    // Adicionar coluna plan_start_date
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS plan_start_date TIMESTAMP
+    `);
+
+    // Adicionar coluna plan_end_date
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS plan_end_date TIMESTAMP
+    `);
+
+    // Criar índice para google_id
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active)');
+
+    console.log('✅ Colunas de autenticação adicionadas/verificadas com sucesso');
+  } catch (error) {
+    console.error('⚠️  Erro ao adicionar colunas de autenticação:', error.message);
+    // Não fazer throw para permitir que a aplicação continue funcionando
+  }
+};
 
 module.exports = {
   pool,
   testConnection,
   initializeTables,
+  addAuthColumnsIfNeeded,
 };
 

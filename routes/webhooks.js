@@ -150,12 +150,14 @@ async function processWebhookEvent(event, paymentData) {
 
           // Buscar user_id da API externa (N8N) do PostgreSQL
           let externalUserId = null;
+          let internalUserId = null;
           try {
             const userFromMongo = await User.findById(userId);
             if (userFromMongo && userFromMongo.email) {
               const userFromPostgres = await userPostgresService.findUserByEmail(userFromMongo.email);
-              if (userFromPostgres && userFromPostgres.n8n_user_id) {
-                externalUserId = userFromPostgres.n8n_user_id;
+              if (userFromPostgres) {
+                externalUserId = userFromPostgres.user_id; // Atualizado para user_id
+                internalUserId = userFromPostgres.id_user_platform; // ID interno da plataforma
               }
             }
           } catch (error) {
@@ -167,6 +169,9 @@ async function processWebhookEvent(event, paymentData) {
             externalUserId = userId; // Fallback: usar ID interno do usuário
           }
 
+          // Usar id_user_platform como identificador principal para a API externa
+          const apiUserId = internalUserId || externalUserId;
+
           // 1. Buscar planoId da API externa baseado no valor pago
           const externalPlanId = await externalCreditsService.getExternalPlanIdByAmount(transaction.amount);
           
@@ -174,12 +179,12 @@ async function processWebhookEvent(event, paymentData) {
             console.warn(`PlanoId não encontrado na API externa para valor ${transaction.amount}. Continuando sem atualizar plano.`);
           } else {
             // 2. Chamar API externa para atualizar plano do usuário
-            await externalCreditsService.updateUserPlan(externalUserId, externalPlanId);
+            await externalCreditsService.updateUserPlan(apiUserId, externalPlanId);
           }
 
           // 3. Adicionar créditos do plano ao usuário na API externa
           if (plan.credits && plan.credits > 0) {
-            await externalCreditsService.addUserCredits(externalUserId, plan.credits);
+            await externalCreditsService.addUserCredits(apiUserId, plan.credits);
           } else if (plan.isUnlimited) {
             // Se for plano ilimitado, pode ser necessário tratar diferente
             console.log(`Plano ${plan.name} é ilimitado. Verificar se precisa de tratamento especial na API externa.`);
@@ -250,7 +255,7 @@ router.post(
       const { user_id, email, nome, telefone, status = 'verified' } = req.body;
 
       console.log('Webhook N8N recebido:', {
-        n8n_user_id: user_id,
+        user_id,
         email,
         nome,
         telefone,
@@ -259,7 +264,7 @@ router.post(
 
       // Armazenar ou atualizar usuário no PostgreSQL
       const userData = {
-        n8n_user_id: user_id,
+        user_id,
         email,
         nome,
         telefone,
@@ -270,7 +275,8 @@ router.post(
 
       console.log('Usuário armazenado/atualizado no PostgreSQL:', {
         id: user.id,
-        n8n_user_id: user.n8n_user_id,
+        id_user_platform: user.id_user_platform,
+        user_id: user.user_id,
         email: user.email,
         nome: user.nome,
         telefone: user.telefone,
@@ -282,7 +288,8 @@ router.post(
         message: 'Usuário armazenado com sucesso',
         data: {
           id: user.id,
-          n8n_user_id: user.n8n_user_id,
+          id_user_platform: user.id_user_platform,
+          user_id: user.user_id,
           email: user.email,
           nome: user.nome,
           telefone: user.telefone,

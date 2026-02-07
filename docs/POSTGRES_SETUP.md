@@ -11,18 +11,20 @@ Esta tabela armazena os dados dos usuários recebidos do N8N após verificação
 ```sql
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
-  n8n_user_id VARCHAR(255) UNIQUE,
+  id_user_platform VARCHAR(255) UNIQUE NOT NULL, -- Identificador interno da plataforma
+  user_id VARCHAR(255) UNIQUE, -- ID do usuário retornado pelo N8N
   email VARCHAR(255) UNIQUE,
   nome VARCHAR(255),
   telefone VARCHAR(20),
   status VARCHAR(50) DEFAULT 'pending',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT users_identifier_check CHECK (n8n_user_id IS NOT NULL OR email IS NOT NULL)
+  CONSTRAINT users_identifier_check CHECK (user_id IS NOT NULL OR email IS NOT NULL)
 );
 
 -- Criar índices para melhor performance (execute cada comando separadamente)
-CREATE INDEX IF NOT EXISTS idx_users_n8n_user_id ON users(n8n_user_id);
+CREATE INDEX IF NOT EXISTS idx_users_id_user_platform ON users(id_user_platform);
+CREATE INDEX IF NOT EXISTS idx_users_user_id ON users(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_telefone ON users(telefone);
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
@@ -31,15 +33,46 @@ CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 ## Campos da Tabela
 
 - **id**: ID interno do banco (auto-incremento)
-- **n8n_user_id**: ID do usuário retornado pelo N8N (único, opcional inicialmente)
-- **email**: Email do usuário (único, opcional mas deve ter pelo menos email ou n8n_user_id)
+- **id_user_platform**: Identificador único interno da plataforma (gerado automaticamente)
+- **user_id**: ID do usuário retornado pelo N8N (único, opcional inicialmente)
+- **email**: Email do usuário (único, opcional mas deve ter pelo menos email ou user_id)
 - **nome**: Nome do usuário (opcional)
 - **telefone**: Número de telefone do usuário (opcional)
 - **status**: Status do usuário (pending, verified, active, inactive) - padrão: 'pending'
 - **created_at**: Data de criação do registro
 - **updated_at**: Data da última atualização
 
-**Nota**: É necessário ter pelo menos um identificador (email ou n8n_user_id) para criar um registro.
+## Migração da Tabela (se já existir)
+
+Se a tabela `users` já existir com a estrutura antiga, execute os comandos de migração:
+
+```sql
+-- Adicionar nova coluna id_user_platform
+ALTER TABLE users ADD COLUMN IF NOT EXISTS id_user_platform VARCHAR(255) UNIQUE;
+
+-- Renomear coluna n8n_user_id para user_id (se existir)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'n8n_user_id') THEN
+    ALTER TABLE users RENAME COLUMN n8n_user_id TO user_id;
+  END IF;
+END $$;
+
+-- Gerar id_user_platform para registros existentes
+UPDATE users SET id_user_platform = gen_random_uuid()::text WHERE id_user_platform IS NULL;
+
+-- Tornar id_user_platform NOT NULL após popular
+ALTER TABLE users ALTER COLUMN id_user_platform SET NOT NULL;
+
+-- Atualizar constraint
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_identifier_check;
+ALTER TABLE users ADD CONSTRAINT users_identifier_check CHECK (user_id IS NOT NULL OR email IS NOT NULL);
+
+-- Recriar índices
+DROP INDEX IF EXISTS idx_users_n8n_user_id;
+CREATE INDEX IF NOT EXISTS idx_users_user_id ON users(user_id);
+CREATE INDEX IF NOT EXISTS idx_users_id_user_platform ON users(id_user_platform);
+```
 
 ## Variáveis de Ambiente
 

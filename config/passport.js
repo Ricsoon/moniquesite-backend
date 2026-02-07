@@ -1,6 +1,6 @@
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const User = require('../models/User');
+const userPostgresService = require('../services/userPostgresService');
 const planPostgresService = require('../services/planPostgresService');
 const config = require('./config');
 
@@ -15,69 +15,68 @@ passport.use(
     async (accessToken, refreshToken, profile, done) => {
       try {
         // Verificar se usuário já existe pelo googleId
-        let user = await User.findOne({ googleId: profile.id });
+        let user = await userPostgresService.findUserByGoogleId(profile.id);
 
         if (user) {
           // Usuário existe, atualizar dados se necessário
-          if (user.email !== profile.emails[0].value) {
-            user.email = profile.emails[0].value;
-          }
-          if (user.name !== profile.displayName) {
-            user.name = profile.displayName;
-          }
-          if (profile.photos && profile.photos[0] && user.picture !== profile.photos[0].value) {
-            user.picture = profile.photos[0].value;
-          }
-          await user.save();
+          user = await userPostgresService.updateUserWithGoogleData(user.id, {
+            googleId: profile.id,
+            name: profile.displayName,
+            email: profile.emails[0].value,
+            picture: profile.photos && profile.photos[0] ? profile.photos[0].value : null
+          });
           return done(null, user);
         }
 
         // Verificar se usuário existe pelo email (caso tenha se cadastrado antes)
-        user = await User.findOne({ email: profile.emails[0].value });
+        user = await userPostgresService.findUserByEmail(profile.emails[0].value);
 
         if (user) {
           // Usuário existe mas não tem googleId, adicionar
-          user.googleId = profile.id;
-          if (profile.photos && profile.photos[0]) {
-            user.picture = profile.photos[0].value;
-          }
-          await user.save();
+          user = await userPostgresService.updateUserWithGoogleData(user.id, {
+            googleId: profile.id,
+            name: profile.displayName,
+            email: profile.emails[0].value,
+            picture: profile.photos && profile.photos[0] ? profile.photos[0].value : null
+          });
           return done(null, user);
         }
 
         // Criar novo usuário com plano gratuito
-        // Buscar plano gratuito do Postgres
         const freePlan = await planPostgresService.findPlanByName('Gratuito');
 
-        user = new User({
+        const newUser = await userPostgresService.createUserWithGoogle({
           googleId: profile.id,
           name: profile.displayName,
           email: profile.emails[0].value,
-          picture: profile.photos && profile.photos[0] ? profile.photos[0].value : null,
-          isActive: true,
+          picture: profile.photos && profile.photos[0] ? profile.photos[0].value : null
         });
 
-        // Se plano gratuito existe, atribuir ao novo usuário
-        // Nota: Planos estão no Postgres (ID numérico), User está no MongoDB (usa string)
-        // Converter ID numérico do Postgres para string para compatibilidade com User
-        if (freePlan) {
-          user.activePlan = freePlan.id.toString(); // Converter ID numérico para string
-          user.planStartDate = new Date();
-          const endDate = new Date();
-          endDate.setMonth(endDate.getMonth() + 1);
-          user.planEndDate = endDate;
-          user.credits = freePlan.credits || 200;
-          user.hasUnlimitedCredits = freePlan.isUnlimited || false;
-        } else {
-          // Se não encontrar plano gratuito, dar 200 créditos padrão
-          user.credits = 200;
-          user.hasUnlimitedCredits = false;
-        }
-
-        await user.save();
-
-        return done(null, user);
+        return done(null, newUser);
       } catch (error) {
+        console.error('Erro na estratégia Google OAuth:', error);
+        return done(error);
+      }
+    }
+  )
+);
+
+// Serializar usuário (necessário para sessão)
+passport.serializeUser((user, done) => {
+  done(null, user.id);
+});
+
+// Desserializar usuário
+passport.deserializeUser(async (id, done) => {
+  try {
+    const user = await userPostgresService.findUserById(id);
+    done(null, user);
+  } catch (error) {
+    done(error);
+  }
+});
+
+module.exports = passport;
         console.error('Erro na estratégia Google OAuth:', error);
         return done(error, null);
       }

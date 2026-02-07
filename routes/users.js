@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
-const User = require('../models/User');
+const userPostgresService = require('../services/userPostgresService');
 const planPostgresService = require('../services/planPostgresService');
 const { authenticate, isAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validation');
