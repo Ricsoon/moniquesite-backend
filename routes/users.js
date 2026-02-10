@@ -188,6 +188,12 @@ router.post(
   '/whatsapp/verify-code',
   authenticate,
   [
+    body('phone')
+      .trim()
+      .notEmpty()
+      .withMessage('Telefone é obrigatório')
+      .matches(/^\d{10,11}$/)
+      .withMessage('Telefone deve conter 10 ou 11 dígitos sem formatação'),
     body('code')
       .trim()
       .notEmpty()
@@ -198,7 +204,7 @@ router.post(
   validate,
   async (req, res) => {
     try {
-      const { code } = req.body;
+      const { code, phone } = req.body;
       const userId = req.user.id; // Usar ID numérico do PostgreSQL
 
       // Buscar usuário do PostgreSQL
@@ -210,8 +216,9 @@ router.post(
         });
       }
 
-      // Buscar código OTP não verificado e não expirado
-      const otpRecord = await otpPostgresService.findPendingOTP(user.email, code, null);
+      // Normalizar telefone e buscar código OTP não verificado e não expirado
+      const normalizedPhone = normalizePhone(phone);
+      const otpRecord = await otpPostgresService.findPendingOTP(user.email, code, normalizedPhone);
 
       if (!otpRecord) {
         // Verificar se existe um código para este usuário (para incrementar tentativas)
