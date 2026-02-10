@@ -3,7 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const transactionPostgresService = require('../services/transactionPostgresService');
 const planPostgresService = require('../services/planPostgresService');
-const User = require('../models/User');
+const userPostgresService = require('../services/userPostgresService');
 const { authenticate, isAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validation');
 const calculatePlanDates = require('../utils/calculatePlanDates');
@@ -21,7 +21,7 @@ router.get('/', authenticate, async (req, res) => {
 
     // Usuário comum só vê suas próprias transações
     if (req.user.role !== 'admin') {
-      filters.userId = req.user._id.toString();
+      filters.userId = req.user.id.toString();
     } else if (req.query.userId) {
       filters.userId = req.query.userId;
     }
@@ -35,14 +35,8 @@ router.get('/', authenticate, async (req, res) => {
 
     const result = await transactionPostgresService.listTransactions(filters);
 
-    // Popular dados do usuário e plano para cada transação
-    for (let transaction of result.transactions) {
-      if (transaction.user && typeof transaction.user === 'string') {
-        const user = await User.findById(transaction.user).select('name email');
-        transaction.user = user || { _id: transaction.user, name: null, email: null };
-      }
-      // O plano já vem populado do serviço
-    }
+    // O serviço já retorna dados do usuário e plano populados
+    // Apenas formatar dados se necessário
 
     res.json({
       success: true,
@@ -83,15 +77,9 @@ router.get('/:id', authenticate, async (req, res) => {
       });
     }
 
-    // Popular dados do usuário se necessário
-    if (transaction.user && typeof transaction.user === 'string') {
-      const user = await User.findById(transaction.user).select('name email');
-      transaction.user = user || { _id: transaction.user, name: null, email: null };
-    }
-
     // Usuário comum só pode ver suas próprias transações
-    const userId = transaction.user?._id?.toString() || transaction.user?.toString();
-    if (req.user.role !== 'admin' && userId !== req.user._id.toString()) {
+    const userId = transaction.user_id?.toString() || transaction.user?.toString();
+    if (req.user.role !== 'admin' && userId !== req.user.id.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Acesso negado',
@@ -144,7 +132,7 @@ router.post(
       const { planId, billingType, creditCard, creditCardToken, creditCardHolderInfo, notes } = req.body;
 
       // Buscar usuário completo
-      const user = await User.findById(req.user._id);
+      const user = await userPostgresService.findUserById(req.user.id);
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -173,10 +161,10 @@ router.post(
       let asaasCustomer;
       try {
         asaasCustomer = await asaasService.createOrUpdateCustomer({
-          asaasCustomerId: user.asaasCustomerId,
-          name: user.name,
+          asaasCustomerId: user.asaas_customer_id,
+          name: user.nome,
           email: user.email,
-          phone: user.phone,
+          phone: user.telefone,
           cpfCnpj: user.cpfCnpj,
           postalCode: user.postalCode,
           address: user.address,
@@ -188,9 +176,13 @@ router.post(
         });
 
         // Salvar ID do cliente Asaas no usuário
-        if (asaasCustomer.id && !user.asaasCustomerId) {
-          user.asaasCustomerId = asaasCustomer.id;
-          await user.save();
+        if (asaasCustomer.id && !user.asaas_customer_id) {
+          // Atualizar campo asaas_customer_id no PostgreSQL
+          const { pool } = require('../config/postgres');
+          await pool.query(
+            'UPDATE users SET asaas_customer_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+            [asaasCustomer.id, user.id]
+          );
         }
       } catch (error) {
         console.error('Erro ao criar cliente no Asaas:', error);
@@ -221,7 +213,7 @@ router.post(
             value: plan.price,
             cycle: cycle,
             description: `Assinatura - ${plan.name}`,
-            externalReference: `plan_${plan.id}_user_${user._id}`,
+            externalReference: `plan_${plan.id}_user_${user.id}`,
             creditCard: creditCard,
             creditCardToken: creditCardToken,
             creditCardHolderInfo: creditCardHolderInfo,
@@ -237,7 +229,7 @@ router.post(
             value: plan.price,
             dueDate: dueDate.toISOString().split('T')[0],
             description: `Pagamento - ${plan.name}`,
-            externalReference: `plan_${plan.id}_user_${user._id}`,
+            externalReference: `plan_${plan.id}_user_${user.id}`,
             creditCard: creditCard,
             creditCardToken: creditCardToken,
             creditCardHolderInfo: creditCardHolderInfo,
@@ -267,7 +259,7 @@ router.post(
 
       // Criar transação no banco
       const transaction = await transactionPostgresService.createTransaction({
-        user: user._id,
+        user: user.id,
         plan: plan,
         amount: plan.price,
         paymentMethod: billingType === 'CREDIT_CARD' ? 'credit_card' :
@@ -336,8 +328,8 @@ router.get('/:id/payment-status', authenticate, async (req, res) => {
     }
 
     // Usuário comum só pode ver suas próprias transações
-    const userId = transaction.user?._id?.toString() || transaction.user?.toString();
-    if (req.user.role !== 'admin' && userId !== req.user._id.toString()) {
+    const userId = transaction.user_id?.toString() || transaction.user?.toString();
+    if (req.user.role !== 'admin' && userId !== req.user.id.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Acesso negado',
@@ -430,8 +422,8 @@ router.get('/:id/pix-qrcode', authenticate, async (req, res) => {
     }
 
     // Usuário comum só pode ver suas próprias transações
-    const userId = transaction.user?._id?.toString() || transaction.user?.toString();
-    if (req.user.role !== 'admin' && userId !== req.user._id.toString()) {
+    const userId = transaction.user_id?.toString() || transaction.user?.toString();
+    if (req.user.role !== 'admin' && userId !== req.user.id.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Acesso negado',
@@ -519,8 +511,8 @@ router.put(
 
       // Popular dados do usuário e plano para resposta
       if (updatedTransaction.user && typeof updatedTransaction.user === 'string') {
-        const user = await User.findById(updatedTransaction.user).select('name email');
-        updatedTransaction.user = user || { _id: updatedTransaction.user, name: null, email: null };
+        const user = await userPostgresService.findUserById(parseInt(updatedTransaction.user));
+        updatedTransaction.user = user || { id: updatedTransaction.user, nome: null, email: null };
       }
 
       res.json({

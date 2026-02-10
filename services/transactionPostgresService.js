@@ -42,7 +42,7 @@ const createTransaction = async (transactionData) => {
     }
 
     // Converter user_id (User ainda está no MongoDB, então mantemos como string)
-    const userId = typeof user === 'object' && user._id ? user._id.toString() : user.toString();
+    const userId = typeof user === 'object' && user.id ? user.id.toString() : user.toString();
 
     const result = await pool.query(
       `INSERT INTO transactions (
@@ -324,8 +324,8 @@ const mapTransactionFromDB = async (row) => {
     populate: async function (field) {
       // Simular método populate() para manter compatibilidade
       if (field === 'user' && typeof this.user === 'string') {
-        const User = require('../models/User');
-        this.user = await User.findById(this.user);
+        const userPostgresService = require('./userPostgresService');
+        this.user = await userPostgresService.findUserById(parseInt(this.user));
       }
       if (field === 'plan' && typeof this.plan === 'string') {
         this.plan = await planPostgresService.findPlanById(parseInt(this.plan));

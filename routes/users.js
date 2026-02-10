@@ -5,119 +5,40 @@ const userPostgresService = require('../services/userPostgresService');
 const planPostgresService = require('../services/planPostgresService');
 const { authenticate, isAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validation');
+const config = require('../config/config');
 
-// @route   GET /api/users
-// @desc    Listar todos os usuários (apenas admin)
-// @access  Private/Admin
-router.get('/', authenticate, isAdmin, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    const filter = {};
-    if (req.query.search) {
-      filter.$or = [
-        { name: { $regex: req.query.search, $options: 'i' } },
-        { email: { $regex: req.query.search, $options: 'i' } },
-      ];
-    }
-    if (req.query.phone) {
-      filter.phone = req.query.phone.trim();
-    }
-    if (req.query.isActive !== undefined) {
-      filter.isActive = req.query.isActive === 'true';
-    }
-
-    const users = await User.find(filter)
-      .select('-password')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
-
-    // Popular activePlan do Postgres para cada usuário
-    for (let user of users) {
-      if (user.activePlan) {
-        try {
-          const planId = parseInt(user.activePlan);
-          if (!isNaN(planId)) {
-            const plan = await planPostgresService.findPlanById(planId);
-            user.activePlan = plan ? {
-              _id: plan._id,
-              id: plan.id,
-              name: plan.name,
-              price: plan.price,
-            } : null;
-          }
-        } catch (error) {
-          console.error('Erro ao buscar plano ativo:', error);
-          user.activePlan = null;
-        }
-      }
-    }
-
-    const total = await User.countDocuments(filter);
-
-    res.json({
-      success: true,
-      data: {
-        users,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit),
-        },
-      },
-    });
-  } catch (error) {
-    console.error('Erro ao listar usuários:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erro ao listar usuários',
-      error: error.message,
-    });
+// Normaliza o telefone: remove não dígitos, remove prefixo 55 se presente e remove um '9' inicial do número local
+function normalizePhone(phoneRaw) {
+  if (!phoneRaw) return '';
+  let digits = phoneRaw.toString().replace(/\D/g, '');
+  // remover prefixo de país 55 se houver
+  if (digits.startsWith('55')) {
+    digits = digits.slice(2);
   }
-});
+  // remover leading 0s
+  while (digits.startsWith('0')) digits = digits.slice(1);
+  // Se o número tem DDD + 9 + restante (11 dígitos), remover o '9' que vem após o DDD
+  // Ex: 81986409513 -> 8186409513 (remover o primeiro 9 após os 2 dígitos do DDD)
+  if (digits.length === 11 && digits.charAt(2) === '9') {
+    digits = digits.slice(0, 2) + digits.slice(3);
+  }
+  return digits;
+}
 
 // @route   GET /api/users/:id
-// @desc    Obter usuário por ID
+// @desc    Obter usuário do PostgreSQL por ID
 // @access  Private
 router.get('/:id', authenticate, async (req, res) => {
   try {
     // Usuário pode ver apenas seus próprios dados, a menos que seja admin
-    if (req.user._id.toString() !== req.params.id && req.user.role !== 'admin') {
+    if (req.user.id.toString() !== req.params.id && !req.user.is_admin) {
       return res.status(403).json({
         success: false,
         message: 'Acesso negado',
       });
     }
 
-    const user = await User.findById(req.params.id)
-      .select('-password');
-
-    // Popular activePlan do Postgres se existir
-    if (user && user.activePlan) {
-      try {
-        const planId = parseInt(user.activePlan);
-        if (!isNaN(planId)) {
-          const plan = await planPostgresService.findPlanById(planId);
-          user.activePlan = plan ? {
-            _id: plan._id,
-            id: plan.id,
-            name: plan.name,
-            description: plan.description,
-            price: plan.price,
-            duration: plan.duration,
-            durationUnit: plan.durationUnit,
-            features: plan.features,
-          } : null;
-        }
-      } catch (error) {
-        console.error('Erro ao buscar plano ativo:', error);
-        user.activePlan = null;
-      }
-    }
+    const user = await userPostgresService.findUserById(parseInt(req.params.id));
 
     if (!user) {
       return res.status(404).json({
@@ -126,9 +47,35 @@ router.get('/:id', authenticate, async (req, res) => {
       });
     }
 
+    // Popular activePlan do Postgres se existir
+    let activePlan = null;
+    if (user.active_plan) {
+      try {
+        const plan = await planPostgresService.findPlanById(user.active_plan);
+        if (plan) {
+          activePlan = {
+            id: plan.id,
+            name: plan.name,
+            description: plan.description,
+            price: plan.price,
+            duration: plan.duration,
+            duration_unit: plan.duration_unit,
+            features: plan.features,
+          };
+        }
+      } catch (error) {
+        console.error('Erro ao buscar plano ativo:', error);
+      }
+    }
+
     res.json({
       success: true,
-      data: { user },
+      data: { 
+        user: {
+          ...user,
+          active_plan: activePlan,
+        }
+      },
     });
   } catch (error) {
     console.error('Erro ao buscar usuário:', error);
@@ -140,184 +87,10 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-// @route   PUT /api/users/:id
-// @desc    Atualizar usuário
-// @access  Private
-router.put(
-  '/:id',
-  authenticate,
-  [
-    body('name')
-      .optional()
-      .trim()
-      .isLength({ min: 2 })
-      .withMessage('Nome deve ter no mínimo 2 caracteres'),
-    body('email')
-      .optional()
-      .isEmail()
-      .withMessage('Email inválido')
-      .normalizeEmail(),
-    body('phone')
-      .optional()
-      .trim(),
-    body('cpfCnpj')
-      .optional()
-      .trim(),
-    body('postalCode')
-      .optional()
-      .trim(),
-    body('address')
-      .optional()
-      .trim(),
-    body('addressNumber')
-      .optional()
-      .trim(),
-    body('complement')
-      .optional()
-      .trim(),
-    body('province')
-      .optional()
-      .trim(),
-    body('city')
-      .optional()
-      .trim(),
-    body('state')
-      .optional()
-      .trim(),
-    body('password')
-      .optional()
-      .isLength({ min: 6 })
-      .withMessage('Senha deve ter no mínimo 6 caracteres'),
-  ],
-  validate,
-  async (req, res) => {
-    try {
-      // Usuário pode atualizar apenas seus próprios dados, a menos que seja admin
-      if (req.user._id.toString() !== req.params.id && req.user.role !== 'admin') {
-        return res.status(403).json({
-          success: false,
-          message: 'Acesso negado',
-        });
-      }
-
-      const user = await User.findById(req.params.id);
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'Usuário não encontrado',
-        });
-      }
-
-      // Verificar se email já está em uso
-      if (req.body.email && req.body.email !== user.email) {
-        const existingUser = await User.findOne({ email: req.body.email });
-        if (existingUser) {
-          return res.status(400).json({
-            success: false,
-            message: 'Email já está em uso',
-          });
-        }
-      }
-
-      // Atualizar campos
-      Object.keys(req.body).forEach((key) => {
-        if (req.body[key] !== undefined && key !== 'role' && key !== 'isActive' && key !== 'asaasCustomerId') {
-          user[key] = req.body[key];
-        }
-        // Apenas admin pode alterar role, isActive e asaasCustomerId
-        if ((key === 'role' || key === 'isActive' || key === 'asaasCustomerId') && req.user.role === 'admin') {
-          user[key] = req.body[key];
-        }
-      });
-
-      await user.save();
-
-      // Se dados do usuário foram atualizados e ele tem asaasCustomerId, atualizar no Asaas
-      if (user.asaasCustomerId && (req.body.name || req.body.email || req.body.phone || req.body.cpfCnpj)) {
-        try {
-          const asaasService = require('../services/asaasService');
-          await asaasService.createOrUpdateCustomer({
-            asaasCustomerId: user.asaasCustomerId,
-            name: user.name,
-            email: user.email,
-            phone: user.phone,
-            cpfCnpj: user.cpfCnpj,
-            postalCode: user.postalCode,
-            address: user.address,
-            addressNumber: user.addressNumber,
-            complement: user.complement,
-            province: user.province,
-            city: user.city,
-            state: user.state,
-          });
-        } catch (error) {
-          console.error('Erro ao atualizar cliente no Asaas:', error);
-          // Não falhar a atualização do usuário se houver erro no Asaas
-        }
-      }
-
-      res.json({
-        success: true,
-        message: 'Usuário atualizado com sucesso',
-        data: {
-          user: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone,
-            role: user.role,
-            isActive: user.isActive,
-            activePlan: user.activePlan,
-          },
-        },
-      });
-    } catch (error) {
-      console.error('Erro ao atualizar usuário:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Erro ao atualizar usuário',
-        error: error.message,
-      });
-    }
-  }
-);
-
-// @route   DELETE /api/users/:id
-// @desc    Deletar usuário (soft delete - apenas admin)
-// @access  Private/Admin
-router.delete('/:id', authenticate, isAdmin, async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'Usuário não encontrado',
-      });
-    }
-
-    // Soft delete - apenas desativar
-    user.isActive = false;
-    await user.save();
-
-    res.json({
-      success: true,
-      message: 'Usuário desativado com sucesso',
-    });
-  } catch (error) {
-    console.error('Erro ao desativar usuário:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erro ao desativar usuário',
-      error: error.message,
-    });
-  }
-});
-
 // ==================== ROTAS WHATSAPP ====================
 
-const OTPCode = require('../models/OTPCode');
+const OTPCode = require('../models/OTPCode'); // Descontinuado - manter para compatibilidade
+const otpPostgresService = require('../services/otpPostgresService');
 const { sendWebhook } = require('../services/webhookService');
 
 // @route   POST /api/users/whatsapp/send-code
@@ -338,16 +111,19 @@ router.post(
   async (req, res) => {
     try {
       const { phone } = req.body;
-      const userId = req.user._id;
+      const userId = req.user.id; // Usar ID numérico do PostgreSQL
 
-      // Buscar usuário completo
-      const user = await User.findById(userId);
+      // Buscar usuário do PostgreSQL
+      const user = await userPostgresService.findUserById(userId);
       if (!user) {
         return res.status(404).json({
           success: false,
           message: 'Usuário não encontrado',
         });
       }
+
+      // Normalizar telefone conforme regra (armazenar sem o 9 e sem código do país)
+      const normalizedPhone = normalizePhone(phone);
 
       // Gerar código OTP de 6 dígitos
       const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -356,42 +132,32 @@ router.post(
       const expiresAt = new Date();
       expiresAt.setMinutes(expiresAt.getMinutes() + 10);
 
-      // Invalidar códigos anteriores não verificados do mesmo usuário e telefone
-      await OTPCode.updateMany(
-        {
-          userId,
-          phone,
-          verified: false,
-        },
-        {
-          $set: { verified: true }, // Marcar como "usado" para invalidar
-        }
-      );
+      // Invalidar códigos anteriores não verificados do mesmo email e telefone
+      await otpPostgresService.invalidateOTPCodes(user.email, normalizedPhone);
 
-      // Criar novo código OTP
-      const otpRecord = new OTPCode({
-        userId,
-        phone,
+      // Criar novo código OTP no PostgreSQL
+      const otpRecord = await otpPostgresService.createOTP({
+        userEmail: user.email,
+        userId: userId,
+        phone: normalizedPhone,
         code: otpCode,
         expiresAt,
-        verified: false,
-        attempts: 0,
+        maxAttempts: 5,
       });
 
-      await otpRecord.save();
-
-      // Preparar payload para webhook
+      // Preparar payload para webhook no formato requisitado (sem + no prefixo)
       const webhookPayload = {
-        user_id: userId.toString(),
-        nome: user.name,
-        email: user.email,
-        telefone: phone,
-        codigo_otp: otpCode,
-        status: 'code_pending',
+        numeroTelefone: `55${normalizedPhone}`,
+        statusCode: 'code_pending',
+        code: otpCode,
       };
 
       // Enviar webhook (não bloqueia a resposta)
-      sendWebhook(webhookPayload).catch((error) => {
+      // Usar webhook específico de teste (override header conforme solicitado)
+      sendWebhook(webhookPayload, {
+        url: 'https://n8n.moniquebot.com.br/webhook/7d1c18e5-1837-4f3c-8ef7-659e9b1ade00',
+        authHeader: 'monique-beta-test',
+      }).catch((error) => {
         console.error('Erro ao enviar webhook (não crítico):', error);
       });
 
@@ -433,32 +199,30 @@ router.post(
   async (req, res) => {
     try {
       const { code } = req.body;
-      const userId = req.user._id;
+      const userId = req.user.id; // Usar ID numérico do PostgreSQL
+
+      // Buscar usuário do PostgreSQL
+      const user = await userPostgresService.findUserById(userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'Usuário não encontrado',
+        });
+      }
 
       // Buscar código OTP não verificado e não expirado
-      const otpRecord = await OTPCode.findOne({
-        userId,
-        code,
-        verified: false,
-        expiresAt: { $gt: new Date() },
-      });
+      const otpRecord = await otpPostgresService.findPendingOTP(user.email, code, null);
 
       if (!otpRecord) {
         // Verificar se existe um código para este usuário (para incrementar tentativas)
-        const existingOtp = await OTPCode.findOne({
-          userId,
-          verified: false,
-          expiresAt: { $gt: new Date() },
-        }).sort({ createdAt: -1 });
+        const existingOtp = await otpPostgresService.findLatestOTP(user.email, null, false);
 
         if (existingOtp) {
-          existingOtp.attempts += 1;
-          await existingOtp.save();
+          const updated = await otpPostgresService.incrementAttempts(existingOtp.id);
 
-          if (existingOtp.attempts >= existingOtp.maxAttempts) {
+          if (updated.attempts >= updated.max_attempts) {
             // Invalidar código após muitas tentativas
-            existingOtp.verified = true;
-            await existingOtp.save();
+            await otpPostgresService.verifyOTP(existingOtp.id);
 
             return res.status(400).json({
               success: false,
@@ -474,9 +238,8 @@ router.post(
       }
 
       // Verificar tentativas
-      if (otpRecord.attempts >= otpRecord.maxAttempts) {
-        otpRecord.verified = true;
-        await otpRecord.save();
+      if (otpRecord.attempts >= otpRecord.max_attempts) {
+        await otpPostgresService.verifyOTP(otpRecord.id);
 
         return res.status(400).json({
           success: false,
@@ -485,7 +248,7 @@ router.post(
       }
 
       // Verificar se o código expirou
-      if (otpRecord.expiresAt < new Date()) {
+      if (otpRecord.expires_at < new Date()) {
         return res.status(400).json({
           success: false,
           message: 'Código expirado. Solicite um novo código.',
@@ -493,28 +256,14 @@ router.post(
       }
 
       // Marcar código como verificado
-      otpRecord.verified = true;
-      otpRecord.verifiedAt = new Date();
-      await otpRecord.save();
+      await otpPostgresService.verifyOTP(otpRecord.id);
 
-      // Atualizar telefone do usuário
-      const user = await User.findById(userId);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'Usuário não encontrado',
-        });
-      }
-
-      user.phone = otpRecord.phone;
-      await user.save();
-
+      // Atualizar usuário PostgreSQL com o telefone verificado
+      // (se houver função para isso - por enquanto apenas marcar OTP como verificado)
+      
       // Armazenar informações no PostgreSQL quando o código for verificado
       // O webhook do N8N retornará o user_id do N8N posteriormente
-      // Por enquanto, armazenamos com status 'pending' até receber o user_id do N8N
       try {
-        const userPostgresService = require('../services/userPostgresService');
-        
         // Tentar buscar usuário no PostgreSQL pelo email primeiro
         let postgresUser = await userPostgresService.findUserByEmail(user.email);
         
@@ -522,7 +271,7 @@ router.post(
         if (!postgresUser) {
           await userPostgresService.createOrUpdateUser({
             email: user.email,
-            nome: user.name,
+            nome: user.nome,
             telefone: otpRecord.phone,
             status: 'pending', // Status pendente até receber user_id do N8N
           });
@@ -530,7 +279,7 @@ router.post(
           // Se já existir, atualizar telefone e manter status
           await userPostgresService.createOrUpdateUser({
             email: user.email,
-            nome: user.name,
+            nome: user.nome,
             telefone: otpRecord.phone,
             status: postgresUser.status || 'pending',
           });
@@ -540,30 +289,52 @@ router.post(
         // Não falhar a verificação se houver erro no PostgreSQL
       }
 
-      // Preparar payload para webhook (status de sucesso)
+      // Preparar payload para webhook (status de sucesso) no formato requisitado
+      // Observação: o segundo envio não deve incluir o código, apenas numeroTelefone e statusCode
       const webhookPayload = {
-        user_id: userId.toString(),
-        nome: user.name,
-        email: user.email,
-        telefone: otpRecord.phone,
-        codigo_otp: code,
-        status: 'code_verified',
+        numeroTelefone: `55${otpRecord.phone}`,
+        statusCode: 'code_verified',
       };
 
-      // Enviar webhook (não bloqueia a resposta)
-      sendWebhook(webhookPayload).catch((error) => {
-        console.error('Erro ao enviar webhook (não crítico):', error);
-      });
+      // Enviar webhook e aguardar resposta para capturar user.id retornado pelo N8N
+      try {
+        const result = await sendWebhook(webhookPayload, {
+          url: 'https://n8n.moniquebot.com.br/webhook/7d1c18e5-1837-4f3c-8ef7-659e9b1ade00',
+          authHeader: 'monique-beta-test',
+        });
+
+        if (result && result.success && result.data) {
+          const data = result.data;
+          // tentar localizar user id retornado em várias chaves possíveis
+          const returnedUserId = data?.user?.id || data?.id || data?.userId || data?.user_id;
+          if (returnedUserId) {
+            try {
+              // Salvar/atualizar usuário relacionando ao ID vindo do N8N
+              await userPostgresService.createOrUpdateUser({
+                user_id: returnedUserId,
+                email: user.email,
+                nome: user.nome,
+                telefone: otpRecord.phone,
+                status: 'verified',
+              });
+            } catch (upsertErr) {
+              console.error('Erro ao salvar user_id retornado pelo webhook:', upsertErr);
+            }
+          }
+        }
+      } catch (webhookErr) {
+        console.error('Erro ao enviar webhook de verificação (não crítico):', webhookErr);
+      }
 
       res.json({
         success: true,
         message: 'WhatsApp vinculado com sucesso',
         data: {
           user: {
-            id: user._id,
-            name: user.name,
+            id: user.id,
+            nome: user.nome,
             email: user.email,
-            phone: user.phone,
+            telefone: otpRecord.phone,
           },
         },
       });

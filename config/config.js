@@ -4,8 +4,8 @@ module.exports = {
   port: process.env.PORT || 3000,
   jwtSecret: process.env.JWT_SECRET || 'jwt_secret_default_change_in_production',
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'jwt_refresh_secret_default_change_in_production',
-  jwtExpire: process.env.JWT_EXPIRE || 3600, // 1 hora
-  jwtRefreshExpire: process.env.JWT_REFRESH_EXPIRE || 604800, // 7 dias
+  jwtExpire: parseInt(process.env.JWT_EXPIRE) || 3600, // 1 hora - converte para número
+  jwtRefreshExpire: parseInt(process.env.JWT_REFRESH_EXPIRE) || 604800, // 7 dias - converte para número
   corsOrigin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim()) : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:80', 'http://localhost'],
   nodeEnv: process.env.NODE_ENV || 'development',
   // Configurações Asaas

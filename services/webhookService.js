@@ -6,18 +6,35 @@ const config = require('../config/config');
  * @param {Object} payload - Dados a serem enviados
  * @returns {Promise<Object>} Resposta do webhook
  */
-async function sendWebhook(payload) {
+/**
+ * Enviar payload para webhook externo
+ * @param {Object} payload - Dados a serem enviados
+ * @param {Object} [options] - Override de URL e header
+ * @param {string} [options.url] - URL do webhook (sobrescreve config.webhookUrl)
+ * @param {string} [options.authHeader] - Valor da header Authorization (sem Bearer)
+ * @returns {Promise<Object>} Resposta do webhook
+ */
+async function sendWebhook(payload, options = {}) {
   try {
-    if (!config.webhookUrl) {
+    const url = options.url || config.webhookUrl;
+    if (!url) {
       console.warn('Webhook URL não configurada. Pulando envio do webhook.');
       return { success: false, message: 'Webhook URL não configurada' };
     }
 
-    const response = await axios.post(config.webhookUrl, payload, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(config.webhookToken && { 'Authorization': `Bearer ${config.webhookToken}` }),
-      },
+    const authHeaderValue = options.authHeader ?? config.webhookToken;
+
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+
+    if (authHeaderValue) {
+      // Enviar exatamente o valor configurado no header Authorization
+      headers['Authorization'] = authHeaderValue;
+    }
+
+    const response = await axios.post(url, payload, {
+      headers,
       timeout: 10000, // 10 segundos de timeout
     });
 

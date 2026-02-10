@@ -138,7 +138,7 @@ router.post('/google/token', async (req, res) => {
           planEndDate: user.plan_end_date,
           credits: user.has_unlimited_credits ? 'unlimited' : user.credits,
           creditsUsed: user.credits_used || 0,
-          hasUnlimitedCredits: user.hasUnlimitedCredits,
+          hasUnlimitedCredits: user.has_unlimited_credits,
         },
         accessToken,
         refreshToken,
@@ -173,10 +173,10 @@ router.post(
       const { verifyRefreshToken } = require('../utils/jwt');
       const decoded = verifyRefreshToken(refreshToken);
 
-      // Buscar usuário
-      const user = await User.findById(decoded.id);
+      // Buscar usuário do PostgreSQL
+      const user = await userPostgresService.findUserById(parseInt(decoded.id));
 
-      if (!user || !user.isActive) {
+      if (!user || !user.is_active) {
         return res.status(401).json({
           success: false,
           message: 'Token inválido ou usuário inativo',
@@ -184,7 +184,7 @@ router.post(
       }
 
       // Gerar novo token de acesso
-      const accessToken = generateAccessToken(user._id);
+      const accessToken = generateAccessToken(user.id);
 
       res.json({
         success: true,
@@ -206,13 +206,13 @@ router.post(
 // @access  Private
 router.get('/me', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await userPostgresService.findUserById(req.user.id);
     
     // Popular activePlan do Postgres se existir
     let activePlan = null;
-    if (user && user.activePlan) {
+    if (user && user.active_plan) {
       try {
-        const planId = parseInt(user.activePlan);
+        const planId = parseInt(user.active_plan);
         if (!isNaN(planId)) {
           activePlan = await planPostgresService.findPlanById(planId);
         }
@@ -225,27 +225,26 @@ router.get('/me', authenticate, async (req, res) => {
       success: true,
       data: {
         user: {
-          id: user._id,
-          name: user.name,
+          id: user.id,
+          name: user.nome,
           email: user.email,
           picture: user.picture,
-          phone: user.phone,
+          phone: user.telefone,
           role: user.role,
           activePlan: activePlan ? {
-            _id: activePlan._id,
             id: activePlan.id,
             name: activePlan.name,
             description: activePlan.description,
             price: activePlan.price,
             duration: activePlan.duration,
-            durationUnit: activePlan.durationUnit,
+            duration_unit: activePlan.duration_unit,
             features: activePlan.features,
           } : null,
-          planStartDate: user.planStartDate,
-          planEndDate: user.planEndDate,
-          credits: user.hasUnlimitedCredits ? 'unlimited' : user.credits,
-          creditsUsed: user.creditsUsed || 0,
-          hasUnlimitedCredits: user.hasUnlimitedCredits,
+          plan_start_date: user.plan_start_date,
+          plan_end_date: user.plan_end_date,
+          credits: user.has_unlimited_credits ? 'unlimited' : user.credits,
+          creditsUsed: user.credits_used || 0,
+          hasUnlimitedCredits: user.has_unlimited_credits,
           createdAt: user.createdAt,
         },
       },

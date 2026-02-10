@@ -292,6 +292,82 @@ const createUserWithGoogle = async (userData) => {
   }
 };
 
+/**
+ * Atualizar créditos e créditos utilizados do usuário
+ * @param {number} userId - ID do usuário
+ * @param {number} credits - Novo saldo de créditos
+ * @param {number} creditsUsed - Créditos já utilizados
+ * @returns {Promise<Object>} Usuário atualizado
+ */
+const updateUserCredits = async (userId, credits, creditsUsed) => {
+  try {
+    const result = await pool.query(
+      `UPDATE users 
+       SET credits = $1, credits_used = $2, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3
+       RETURNING *`,
+      [credits, creditsUsed, userId]
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error('Erro ao atualizar créditos do usuário:', error);
+    throw error;
+  }
+};
+
+/**
+ * Atualizar apenas créditos utilizados
+ * @param {number} userId - ID do usuário
+ * @param {number} creditsUsed - Créditos já utilizados
+ * @returns {Promise<Object>} Usuário atualizado
+ */
+const updateUserCreditsUsed = async (userId, creditsUsed) => {
+  try {
+    const result = await pool.query(
+      `UPDATE users 
+       SET credits_used = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
+      [creditsUsed, userId]
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error('Erro ao atualizar créditos utilizados do usuário:', error);
+    throw error;
+  }
+};
+
+/**
+ * Ativar plano para usuário e atualizar créditos
+ * @param {number} userId - ID do usuário
+ * @param {number} planId - ID do plano a ativar
+ * @param {Date} planStartDate - Data inicial do plano
+ * @param {Date} planEndDate - Data final do plano
+ * @param {number} credits - Novo saldo de créditos
+ * @param {boolean} hasUnlimitedCredits - Se o plano é ilimitado
+ * @returns {Promise<Object>} Usuário atualizado
+ */
+const updateUserPlan = async (userId, planId, planStartDate, planEndDate, credits, hasUnlimitedCredits) => {
+  try {
+    const result = await pool.query(
+      `UPDATE users 
+       SET active_plan = $1, 
+           plan_start_date = $2, 
+           plan_end_date = $3, 
+           credits = $4,
+           has_unlimited_credits = $5,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $6
+       RETURNING *`,
+      [planId, planStartDate, planEndDate, credits, hasUnlimitedCredits, userId]
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error('Erro ao atualizar plano do usuário:', error);
+    throw error;
+  }
+};
+
 module.exports = {
   createOrUpdateUser,
   findUserByUserId,
@@ -302,5 +378,8 @@ module.exports = {
   findUserByGoogleId,
   updateUserWithGoogleData,
   createUserWithGoogle,
+  updateUserCredits,
+  updateUserCreditsUsed,
+  updateUserPlan,
 };
 

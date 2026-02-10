@@ -5,7 +5,6 @@ const validate = require('../middleware/validation');
 const transactionPostgresService = require('../services/transactionPostgresService');
 const planPostgresService = require('../services/planPostgresService');
 const externalCreditsService = require('../services/externalCreditsService');
-const User = require('../models/User');
 const { getPayment, getSubscription } = require('../services/asaasService');
 const userPostgresService = require('../services/userPostgresService');
 
@@ -120,19 +119,9 @@ async function processWebhookEvent(event, paymentData) {
         
         try {
           // Buscar dados do usuário e plano
-          let userId = transaction.user?._id || transaction.user;
+          let userId = transaction.user_id;
           let plan = transaction.plan;
           
-          // Se o user é apenas um ID string, buscar o objeto User completo
-          if (typeof userId === 'string') {
-            const userObj = await User.findById(userId);
-            if (userObj) {
-              userId = userObj._id.toString();
-            }
-          } else if (userId && userId._id) {
-            userId = userId._id.toString();
-          }
-
           // Se o plano não veio populado, buscar pelo plan_id
           if (!plan && transaction.plan_id) {
             plan = await planPostgresService.findPlanById(transaction.plan_id);
@@ -149,16 +138,13 @@ async function processWebhookEvent(event, paymentData) {
           }
 
           // Buscar user_id da API externa (N8N) do PostgreSQL
-          let externalUserId = null;
+          let externalUserId = userId;
           let internalUserId = null;
           try {
-            const userFromMongo = await User.findById(userId);
-            if (userFromMongo && userFromMongo.email) {
-              const userFromPostgres = await userPostgresService.findUserByEmail(userFromMongo.email);
-              if (userFromPostgres) {
-                externalUserId = userFromPostgres.user_id; // Atualizado para user_id
-                internalUserId = userFromPostgres.id_user_platform; // ID interno da plataforma
-              }
+            const userFromPostgres = await userPostgresService.findUserById(userId);
+            if (userFromPostgres) {
+              externalUserId = userFromPostgres.user_id || userId;
+              internalUserId = userFromPostgres.id_user_platform;
             }
           } catch (error) {
             console.error('Erro ao buscar user_id da API externa:', error);
@@ -200,15 +186,13 @@ async function processWebhookEvent(event, paymentData) {
 
     // Se assinatura foi cancelada
     if (event === 'SUBSCRIPTION_DELETED' || event === 'SUBSCRIPTION_CANCELLED') {
-      const userId = transaction.user?._id || transaction.user;
+      const userId = transaction.user;
       if (userId) {
-        const user = await User.findById(typeof userId === 'object' ? userId._id : userId);
+        const user = await userPostgresService.findUserById(typeof userId === 'object' ? userId.id : parseInt(userId));
         if (user) {
-          user.activePlan = null;
-          user.planStartDate = null;
-          user.planEndDate = null;
-          await user.save();
-          console.log(`Plano cancelado para usuário ${user._id}`);
+          // Cancelar plano do usuário no PostgreSQL
+          await userPostgresService.updateUserPlan(user.id, null, null, null, 0, false);
+          console.log(`Plano cancelado para usuário ${user.id}`);
         }
       }
     }

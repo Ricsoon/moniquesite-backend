@@ -115,6 +115,28 @@ const initializeTables = async () => {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_transactions_asaas_subscription_id ON transactions(asaas_subscription_id)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_transactions_user_created ON transactions(user_id, created_at DESC)');
 
+    // Criar tabela de OTP Codes
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS otp_codes (
+        id SERIAL PRIMARY KEY,
+        user_email VARCHAR(255) NOT NULL,
+        user_id INTEGER REFERENCES users(id),
+        phone VARCHAR(20) NOT NULL,
+        code VARCHAR(6) NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        verified BOOLEAN DEFAULT false,
+        verified_at TIMESTAMP,
+        attempts INTEGER DEFAULT 0,
+        max_attempts INTEGER DEFAULT 5,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Criar índices para otp_codes com TTL via política
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_otp_codes_user_email ON otp_codes(user_email, phone, verified)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_otp_codes_code_verified ON otp_codes(code, verified)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_otp_codes_expires_at ON otp_codes(expires_at)');
+
     console.log('✅ Tabelas do PostgreSQL inicializadas com sucesso');
   } catch (error) {
     console.error('❌ Erro ao inicializar tabelas PostgreSQL:', error);

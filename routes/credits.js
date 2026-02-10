@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
-const User = require('../models/User');
+const userPostgresService = require('../services/userPostgresService');
 const planPostgresService = require('../services/planPostgresService');
 const { authenticate, isAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validation');
@@ -11,13 +11,20 @@ const validate = require('../middleware/validation');
 // @access  Private
 router.get('/balance', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await userPostgresService.findUserById(req.user.id);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuário não encontrado',
+      });
+    }
     
     // Popular activePlan do Postgres se existir
     let activePlan = null;
-    if (user.activePlan) {
+    if (user.active_plan) {
       try {
-        const planId = parseInt(user.activePlan);
+        const planId = parseInt(user.active_plan);
         if (!isNaN(planId)) {
           activePlan = await planPostgresService.findPlanById(planId);
         }
@@ -26,24 +33,24 @@ router.get('/balance', authenticate, async (req, res) => {
       }
     }
 
-    const availableCredits = user.hasUnlimitedCredits ? 'unlimited' : (user.credits || 0);
-    const usedCredits = user.creditsUsed || 0;
+    const availableCredits = user.has_unlimited_credits ? 'unlimited' : (user.credits || 0);
+    const usedCredits = user.credits_used || 0;
 
     res.json({
       success: true,
       data: {
         credits: availableCredits,
         creditsUsed: usedCredits,
-        hasUnlimitedCredits: user.hasUnlimitedCredits,
+        hasUnlimitedCredits: user.has_unlimited_credits,
         activePlan: activePlan ? {
           _id: activePlan._id,
           id: activePlan.id,
           name: activePlan.name,
           credits: activePlan.credits,
-          isUnlimited: activePlan.isUnlimited,
+          isUnlimited: activePlan.is_unlimited,
         } : null,
-        planStartDate: user.planStartDate,
-        planEndDate: user.planEndDate,
+        planStartDate: user.plan_start_date,
+        planEndDate: user.plan_end_date,
       },
     });
   } catch (error) {
@@ -71,7 +78,7 @@ router.post(
   async (req, res) => {
     try {
       const { amount } = req.body;
-      const user = await User.findById(req.user._id);
+      const user = await userPostgresService.findUserById(req.user.id);
 
       if (!user) {
         return res.status(404).json({
@@ -81,17 +88,16 @@ router.post(
       }
 
       // Verificar se tem créditos ilimitados
-      if (user.hasUnlimitedCredits) {
+      if (user.has_unlimited_credits) {
         // Usuário com créditos ilimitados, apenas incrementar créditos utilizados
-        user.creditsUsed = (user.creditsUsed || 0) + amount;
-        await user.save();
+        const updatedUser = await userPostgresService.updateUserCreditsUsed(user.id, (user.credits_used || 0) + amount);
 
         return res.json({
           success: true,
           message: 'Créditos consumidos com sucesso',
           data: {
             credits: 'unlimited',
-            creditsUsed: user.creditsUsed,
+            creditsUsed: updatedUser.credits_used,
             amountConsumed: amount,
           },
         });
@@ -111,16 +117,16 @@ router.post(
       }
 
       // Consumir créditos
-      user.credits -= amount;
-      user.creditsUsed = (user.creditsUsed || 0) + amount;
-      await user.save();
+      const newCredits = user.credits - amount;
+      const newCreditsUsed = (user.credits_used || 0) + amount;
+      const updatedUser = await userPostgresService.updateUserCredits(user.id, newCredits, newCreditsUsed);
 
       res.json({
         success: true,
         message: 'Créditos consumidos com sucesso',
         data: {
-          credits: user.credits,
-          creditsUsed: user.creditsUsed,
+          credits: updatedUser.credits,
+          creditsUsed: updatedUser.credits_used,
           amountConsumed: amount,
         },
       });
@@ -146,7 +152,7 @@ router.post(
     body('userId')
       .notEmpty()
       .withMessage('ID do usuário é obrigatório')
-      .isMongoId()
+      .isInt()
       .withMessage('ID do usuário inválido'),
     body('amount')
       .isInt({ min: 1 })
@@ -156,7 +162,7 @@ router.post(
   async (req, res) => {
     try {
       const { userId, amount } = req.body;
-      const user = await User.findById(userId);
+      const user = await userPostgresService.findUserById(parseInt(userId));
 
       if (!user) {
         return res.status(404).json({
@@ -166,21 +172,21 @@ router.post(
       }
 
       // Não adicionar créditos se o usuário tem créditos ilimitados
-      if (user.hasUnlimitedCredits) {
+      if (user.has_unlimited_credits) {
         return res.status(400).json({
           success: false,
           message: 'Usuário possui créditos ilimitados',
         });
       }
 
-      user.credits = (user.credits || 0) + amount;
-      await user.save();
+      const newCredits = (user.credits || 0) + amount;
+      const updatedUser = await userPostgresService.updateUserCredits(user.id, newCredits, user.credits_used || 0);
 
       res.json({
         success: true,
         message: 'Créditos adicionados com sucesso',
         data: {
-          userId: user._id,
+          userId: user.id,
           credits: user.credits,
           amountAdded: amount,
         },
@@ -206,14 +212,14 @@ router.post(
   [
     body('userId')
       .optional()
-      .isMongoId()
+      .isInt({min: 1})
       .withMessage('ID do usuário inválido'),
   ],
   validate,
   async (req, res) => {
     try {
-      const userId = req.body.userId || req.user._id;
-      const user = await User.findById(userId);
+      const userId = parseInt(req.body.userId || req.user.id);
+      const user = await userPostgresService.findUserById(userId);
 
       if (!user) {
         return res.status(404).json({
@@ -223,14 +229,13 @@ router.post(
       }
 
       // Resetar créditos utilizados
-      user.creditsUsed = 0;
-      await user.save();
+      await userPostgresService.updateUserCreditsUsed(userId, 0);
 
       res.json({
         success: true,
         message: 'Créditos utilizados resetados com sucesso',
         data: {
-          userId: user._id,
+          userId: user.id,
           creditsUsed: 0,
         },
       });
@@ -263,7 +268,7 @@ router.get(
         });
       }
 
-      const user = await User.findById(req.user._id);
+      const user = await userPostgresService.findUserById(req.user.id);
 
       if (!user) {
         return res.status(404).json({
@@ -273,7 +278,7 @@ router.get(
       }
 
       // Verificar se tem créditos ilimitados
-      if (user.hasUnlimitedCredits) {
+      if (user.has_unlimited_credits) {
         return res.json({
           success: true,
           data: {
@@ -327,8 +332,8 @@ router.post(
     try {
       const { telefone, creditos } = req.body;
 
-      // Buscar usuário pelo número de telefone
-      const user = await User.findOne({ phone: telefone.trim() });
+      // Buscar usuário pelo número de telefone (procurar no PostgreSQL por telefone)
+      const user = await userPostgresService.findUserByPhone(telefone.trim());
 
       if (!user) {
         return res.status(404).json({
@@ -338,7 +343,7 @@ router.post(
       }
 
       // Verificar se usuário tem créditos ilimitados (não deve adicionar créditos)
-      if (user.hasUnlimitedCredits) {
+      if (user.has_unlimited_credits) {
         return res.status(400).json({
           success: false,
           message: 'Usuário possui créditos ilimitados. Não é possível adicionar créditos adicionais.',
@@ -350,16 +355,15 @@ router.post(
 
       // Atualizar saldo: somar os novos créditos ao saldo existente
       const novoSaldo = saldoAtual + creditos;
-      user.credits = novoSaldo;
-      await user.save();
+      await userPostgresService.updateUserCredits(user.id, novoSaldo, user.credits_used || 0);
 
-      console.log(`Créditos adicionados para usuário ${user._id} (telefone: ${telefone}): ${creditos} créditos. Saldo anterior: ${saldoAtual}, Saldo atual: ${novoSaldo}`);
+      console.log(`Créditos adicionados para usuário ${user.id} (telefone: ${telefone}): ${creditos} créditos. Saldo anterior: ${saldoAtual}, Saldo atual: ${novoSaldo}`);
 
       res.json({
         success: true,
         message: 'Créditos adicionados com sucesso',
         data: {
-          user_id: user._id.toString(),
+          user_id: user.id.toString(),
           telefone: telefone,
           creditos_adicionados: creditos,
           saldo_anterior: saldoAtual,

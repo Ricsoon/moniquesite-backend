@@ -4,7 +4,7 @@ const { body } = require('express-validator');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validation');
 const supabaseService = require('../services/supabaseService');
-const User = require('../models/User');
+const userPostgresService = require('../services/userPostgresService');
 
 // @route   POST /api/supabase/sync-credits
 // @desc    Sincronizar créditos do MongoDB para Supabase
@@ -14,7 +14,7 @@ router.post(
   authenticate,
   async (req, res) => {
     try {
-      const user = await User.findById(req.user._id);
+      const user = await userPostgresService.findUserById(req.user.id);
 
       if (!user) {
         return res.status(404).json({
@@ -25,8 +25,8 @@ router.post(
 
       // Buscar usuário no Supabase
       let supabaseUser = null;
-      if (user.googleId) {
-        supabaseUser = await supabaseService.findUserByGoogleId(user.googleId);
+      if (user.google_id) {
+        supabaseUser = await supabaseService.findUserByGoogleId(user.google_id);
       }
       
       if (!supabaseUser && user.email) {
@@ -44,18 +44,18 @@ router.post(
       await supabaseService.syncCreditsToSupabase(
         supabaseUser.id,
         user.credits,
-        user.creditsUsed || 0,
-        user.hasUnlimitedCredits
+        user.credits_used || 0,
+        user.has_unlimited_credits
       );
 
       res.json({
         success: true,
         message: 'Créditos sincronizados com sucesso',
         data: {
-          userId: user._id,
+          userId: user.id,
           supabaseUserId: supabaseUser.id,
-          credits: user.hasUnlimitedCredits ? 'unlimited' : user.credits,
-          creditsUsed: user.creditsUsed || 0,
+          credits: user.has_unlimited_credits ? 'unlimited' : user.credits,
+          creditsUsed: user.credits_used || 0,
         },
       });
     } catch (error) {
@@ -74,7 +74,7 @@ router.post(
 // @access  Private
 router.get('/balance', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await userPostgresService.findUserById(req.user.id);
 
     if (!user) {
       return res.status(404).json({
@@ -85,8 +85,8 @@ router.get('/balance', authenticate, async (req, res) => {
 
     // Buscar usuário no Supabase
     let supabaseUser = null;
-    if (user.googleId) {
-      supabaseUser = await supabaseService.findUserByGoogleId(user.googleId);
+    if (user.google_id) {
+      supabaseUser = await supabaseService.findUserByGoogleId(user.google_id);
     }
     
     if (!supabaseUser && user.email) {
