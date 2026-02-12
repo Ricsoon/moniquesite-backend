@@ -12,13 +12,13 @@ const { pool } = require('../config/postgres');
  */
 const createOrUpdateUser = async (userData) => {
   try {
-    const { user_id, email, nome, telefone, status = 'pending' } = userData;
+    const { user_id, email, nome, telefone, status = 'pending', active_plan } = userData;
 
     // Verificar se usuário já existe pelo user_id ou email
     let existingUser = null;
     if (user_id) {
       const result = await pool.query(
-        'SELECT * FROM users WHERE user_id = $1',
+        'SELECT * FROM users WHERE n8n_user_id = $1',
         [user_id]
       );
       existingUser = result.rows[0];
@@ -40,7 +40,7 @@ const createOrUpdateUser = async (userData) => {
       let paramCount = 1;
 
       if (user_id !== undefined && user_id !== null && user_id !== '') {
-        updates.push(`user_id = $${paramCount++}`);
+        updates.push(`n8n_user_id = $${paramCount++}`);
         values.push(user_id);
       }
       if (email !== undefined && email !== null && email !== '') {
@@ -59,18 +59,22 @@ const createOrUpdateUser = async (userData) => {
         updates.push(`status = $${paramCount++}`);
         values.push(status);
       }
+      if (active_plan !== undefined && active_plan !== null) {
+        updates.push(`active_plan = $${paramCount++}`);
+        values.push(active_plan);
+      }
 
       if (updates.length > 0) {
         updates.push(`updated_at = CURRENT_TIMESTAMP`);
         values.push(existingUser.id);
-        
+
         const updateQuery = `
           UPDATE users 
           SET ${updates.join(', ')}
           WHERE id = $${paramCount}
           RETURNING *
         `;
-        
+
         const result = await pool.query(updateQuery, values);
         return result.rows[0];
       } else {
@@ -78,13 +82,13 @@ const createOrUpdateUser = async (userData) => {
       }
     } else {
       // Criar novo usuário - só insere campos que foram fornecidos
-      const fields = ['id_user_platform'];
-      const placeholders = ['gen_random_uuid()::text'];
+      const fields = [];
+      const placeholders = [];
       const values = [];
       let paramCount = 1;
 
       if (user_id !== undefined && user_id !== null && user_id !== '') {
-        fields.push('user_id');
+        fields.push('n8n_user_id');
         placeholders.push(`$${paramCount++}`);
         values.push(user_id);
       }
@@ -103,11 +107,17 @@ const createOrUpdateUser = async (userData) => {
         placeholders.push(`$${paramCount++}`);
         values.push(telefone);
       }
-      
+
       // Status sempre é definido (usa padrão 'pending' se não fornecido)
       fields.push('status');
       placeholders.push(`$${paramCount++}`);
       values.push(status || 'pending');
+
+      if (active_plan !== undefined && active_plan !== null) {
+        fields.push('active_plan');
+        placeholders.push(`$${paramCount++}`);
+        values.push(active_plan);
+      }
 
       // Verificar se pelo menos um identificador foi fornecido (email ou user_id)
       if (!email && !user_id) {
@@ -137,7 +147,7 @@ const createOrUpdateUser = async (userData) => {
 const findUserByUserId = async (userId) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM users WHERE user_id = $1',
+      'SELECT * FROM users WHERE n8n_user_id = $1',
       [userId]
     );
     return result.rows[0] || null;
@@ -250,7 +260,7 @@ const findUserByGoogleId = async (googleId) => {
 const updateUserWithGoogleData = async (userId, googleData) => {
   try {
     const { googleId, name, picture, email } = googleData;
-    
+
     const result = await pool.query(
       `UPDATE users 
        SET google_id = $1, 
@@ -278,7 +288,7 @@ const updateUserWithGoogleData = async (userId, googleData) => {
 const createUserWithGoogle = async (userData) => {
   try {
     const { googleId, name, email, picture } = userData;
-    
+
     const result = await pool.query(
       `INSERT INTO users (google_id, nome, email, picture, status, is_active, created_at, updated_at)
        VALUES ($1, $2, $3, $4, 'active', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)

@@ -204,7 +204,21 @@ const addAuthColumnsIfNeeded = async () => {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active)');
 
-    console.log('✅ Colunas de autenticação adicionadas/verificadas com sucesso');
+    // Adicionar colunas para sincronização de planos (tabela plans)
+    await pool.query(`
+      ALTER TABLE plans 
+      ADD COLUMN IF NOT EXISTS external_id VARCHAR(255) UNIQUE
+    `);
+
+    await pool.query(`
+      ALTER TABLE plans 
+      ADD COLUMN IF NOT EXISTS slug VARCHAR(255)
+    `);
+
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_plans_external_id ON plans(external_id)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_plans_slug ON plans(slug)');
+
+    console.log('✅ Colunas de autenticação e planos adicionadas/verificadas com sucesso');
   } catch (error) {
     console.error('⚠️  Erro ao adicionar colunas de autenticação:', error.message);
     // Não fazer throw para permitir que a aplicação continue funcionando

@@ -246,6 +246,87 @@ const mapPlanFromDB = (row) => {
   };
 };
 
+/**
+ * Sincronizar plano da API Monique com o banco local
+ * @param {Object} apiPlan - Dados do plano vindos da API
+ * @returns {Promise<Object>} Plano local sincronizado (com ID local)
+ */
+const syncPlanFromApi = async (apiPlan) => {
+  try {
+    if (!apiPlan || !apiPlan.id) {
+      throw new Error('Dados do plano inválidos para sincronização');
+    }
+
+    const externalId = apiPlan.id;
+    const name = apiPlan.nome;
+    const slug = apiPlan.slug;
+    const description = apiPlan.descricao;
+    const price = parseFloat(apiPlan.preco);
+    const credits = apiPlan.limite_mensal;
+    const isActive = apiPlan.ativo;
+
+    // 1. Tentar encontrar pelo external_id
+    let result = await pool.query('SELECT * FROM plans WHERE external_id = $1', [externalId]);
+    let plan = result.rows[0];
+
+    if (plan) {
+      // Atualizar plano existente
+      const updateResult = await pool.query(
+        `UPDATE plans 
+         SET name = $1, description = $2, price = $3, slug = $4, credits = $5, is_active = $6, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $7 
+         RETURNING *`,
+        [name, description, price, slug, credits, isActive, plan.id]
+      );
+      return mapPlanFromDB(updateResult.rows[0]);
+    }
+
+    // 2. Se não achou pelo ID externo, tentar pelo slug (se fornecido)
+    if (slug) {
+      result = await pool.query('SELECT * FROM plans WHERE slug = $1', [slug]);
+      plan = result.rows[0];
+    }
+
+    // 3. Se não achou pelo slug, tentar pelo nome
+    if (!plan && name) {
+      result = await pool.query('SELECT * FROM plans WHERE name = $1', [name]);
+      plan = result.rows[0];
+    }
+
+    if (plan) {
+      // Atualizar o plano existente com o external_id e outros dados
+      const updateResult = await pool.query(
+        `UPDATE plans 
+         SET external_id = $1, description = $2, price = $3, slug = $4, credits = $5, is_active = $6, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $7 
+         RETURNING *`,
+        [externalId, description, price, slug || plan.slug, credits, isActive, plan.id]
+      );
+      return mapPlanFromDB(updateResult.rows[0]);
+    }
+
+    // 4. Se não existe, criar novo
+    // Definir valores padrão para campos obrigatórios não retornados pela API
+    const duration = 1;
+    const durationUnit = 'months';
+    const features = [];
+    const isUnlimited = false; // Assumindo false por padrão, ou lógica baseada em credits?
+
+    const insertResult = await pool.query(
+      `INSERT INTO plans (name, description, price, duration, duration_unit, features, credits, is_unlimited, is_active, external_id, slug)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
+      [name, description, price, duration, durationUnit, features, credits, isUnlimited, isActive, externalId, slug]
+    );
+
+    return mapPlanFromDB(insertResult.rows[0]);
+  } catch (error) {
+    console.error('Erro ao sincronizar plano da API:', error);
+    // Não lançar erro para não bloquear o fluxo principal, mas retornar null
+    return null;
+  }
+};
+
 module.exports = {
   createPlan,
   findPlanById,
@@ -253,5 +334,6 @@ module.exports = {
   listPlans,
   updatePlan,
   deactivatePlan,
+  syncPlanFromApi,
 };
 

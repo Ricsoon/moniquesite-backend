@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const userPostgresService = require('../services/userPostgresService');
 const planPostgresService = require('../services/planPostgresService');
+const moniqueApiService = require('../services/moniqueApiService');
 const { authenticate, isAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validation');
 const config = require('../config/config');
@@ -70,7 +71,7 @@ router.get('/:id', authenticate, async (req, res) => {
 
     res.json({
       success: true,
-      data: { 
+      data: {
         user: {
           ...user,
           active_plan: activePlan,
@@ -128,20 +129,16 @@ router.post(
       // Gerar código OTP de 6 dígitos
       const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-      // Definir expiração (10 minutos)
-      const expiresAt = new Date();
-      expiresAt.setMinutes(expiresAt.getMinutes() + 10);
-
       // Invalidar códigos anteriores não verificados do mesmo email e telefone
       await otpPostgresService.invalidateOTPCodes(user.email, normalizedPhone);
 
-      // Criar novo código OTP no PostgreSQL
+      // Criar novo código OTP no PostgreSQL (expiração gerada pelo PostgreSQL via NOW())
       const otpRecord = await otpPostgresService.createOTP({
         userEmail: user.email,
         userId: userId,
         phone: normalizedPhone,
         code: otpCode,
-        expiresAt,
+        expirationMinutes: 5,
         maxAttempts: 5,
       });
 
@@ -167,7 +164,7 @@ router.post(
         success: true,
         message: 'Código de verificação enviado com sucesso',
         data: {
-          expiresAt: expiresAt.toISOString(),
+          expiresAt: otpRecord.expires_at,
         },
       });
     } catch (error) {
@@ -267,13 +264,13 @@ router.post(
 
       // Atualizar usuário PostgreSQL com o telefone verificado
       // (se houver função para isso - por enquanto apenas marcar OTP como verificado)
-      
+
       // Armazenar informações no PostgreSQL quando o código for verificado
       // O webhook do N8N retornará o user_id do N8N posteriormente
       try {
         // Tentar buscar usuário no PostgreSQL pelo email primeiro
         let postgresUser = await userPostgresService.findUserByEmail(user.email);
-        
+
         // Se não existir, criar novo registro
         if (!postgresUser) {
           await userPostgresService.createOrUpdateUser({
@@ -312,20 +309,38 @@ router.post(
 
         if (result && result.success && result.data) {
           const data = result.data;
+          console.log('[WEBHOOK-DEBUG] Resposta completa do N8N:', JSON.stringify(data, null, 2));
           // tentar localizar user id retornado em várias chaves possíveis
           const returnedUserId = data?.user?.id || data?.id || data?.userId || data?.user_id;
+          console.log('[WEBHOOK-DEBUG] userId extraído:', returnedUserId);
           if (returnedUserId) {
             try {
-              // Salvar/atualizar usuário relacionando ao ID vindo do N8N
+              let localPlanId = null;
+
+              // Buscar informações do plano do usuário na API Monique
+              const planData = await moniqueApiService.getUserPlan(returnedUserId);
+              if (planData) {
+                console.log('[PLAN] Plano do usuário encontrado:', JSON.stringify(planData, null, 2));
+
+                // Sincronizar plano com a tabela local
+                const localPlan = await planPostgresService.syncPlanFromApi(planData);
+                if (localPlan) {
+                  localPlanId = localPlan.id;
+                  console.log('[PLAN] Plano sincronizado localmente. ID:', localPlan.id);
+                }
+              }
+
+              // Salvar/atualizar usuário relacionando ao ID vindo do N8N e plano
               await userPostgresService.createOrUpdateUser({
                 user_id: returnedUserId,
                 email: user.email,
                 nome: user.nome,
                 telefone: otpRecord.phone,
                 status: 'verified',
+                active_plan: localPlanId,
               });
             } catch (upsertErr) {
-              console.error('Erro ao salvar user_id retornado pelo webhook:', upsertErr);
+              console.error('Erro ao salvar user_id ou buscar plano:', upsertErr);
             }
           }
         }

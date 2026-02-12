@@ -4,6 +4,7 @@ const passport = require('passport');
 const axios = require('axios');
 const userPostgresService = require('../services/userPostgresService');
 const planPostgresService = require('../services/planPostgresService');
+const moniqueApiService = require('../services/moniqueApiService');
 const { generateAccessToken, generateRefreshToken } = require('../utils/jwt');
 const { authenticate } = require('../middleware/auth');
 
@@ -118,6 +119,25 @@ router.post('/google/token', async (req, res) => {
       });
     }
 
+    // Sincronizar plano se possível
+    if (user.n8n_user_id) {
+      try {
+        const planData = await moniqueApiService.getUserPlan(user.n8n_user_id);
+        if (planData) {
+          const localPlan = await planPostgresService.syncPlanFromApi(planData);
+          if (localPlan && localPlan.id !== user.active_plan) {
+            await userPostgresService.createOrUpdateUser({
+              user_id: user.n8n_user_id,
+              active_plan: localPlan.id
+            });
+            user.active_plan = localPlan.id; // Atualizar para o token/resposta
+          }
+        }
+      } catch (err) {
+        console.error('[AUTH] Erro ao sincronizar plano no login:', err);
+      }
+    }
+
     // Gerar tokens JWT
     const accessToken = generateAccessToken(user.id);
     const refreshToken = generateRefreshToken(user.id);
@@ -207,7 +227,7 @@ router.post(
 router.get('/me', authenticate, async (req, res) => {
   try {
     const user = await userPostgresService.findUserById(req.user.id);
-    
+
     // Popular activePlan do Postgres se existir
     let activePlan = null;
     if (user && user.active_plan) {
@@ -218,6 +238,43 @@ router.get('/me', authenticate, async (req, res) => {
         }
       } catch (error) {
         console.error('Erro ao buscar plano ativo:', error);
+      }
+    }
+
+    // Verificação e sincronização de plano com API externa se tiver n8n_user_id
+    if (user && user.n8n_user_id) {
+      try {
+        // Buscar plano na API
+        const planData = await moniqueApiService.getUserPlan(user.n8n_user_id);
+        if (planData) {
+          // Sincronizar localmente
+          const localPlan = await planPostgresService.syncPlanFromApi(planData);
+
+          // Se o plano mudou ou não estava setado, atualizar usuário
+          if (localPlan && localPlan.id !== user.active_plan) {
+            console.log(`[AUTH] Atualizando plano do usuário ${user.id} para ${localPlan.name} (ID: ${localPlan.id})`);
+            await userPostgresService.createOrUpdateUser({
+              user_id: user.n8n_user_id,
+              active_plan: localPlan.id
+            });
+
+            // Atualizar objeto user local para refletir na resposta
+            user.active_plan = localPlan.id;
+
+            // Atualizar objeto activePlan para resposta
+            activePlan = {
+              id: localPlan.id,
+              name: localPlan.name,
+              description: localPlan.description,
+              price: localPlan.price,
+              duration: localPlan.duration,
+              duration_unit: localPlan.durationUnit, // Note a diferença de casing no retorno do service vs DB
+              features: localPlan.features,
+            };
+          }
+        }
+      } catch (syncErr) {
+        console.error('[AUTH] Erro ao sincronizar plano no /me:', syncErr);
       }
     }
 
@@ -237,7 +294,7 @@ router.get('/me', authenticate, async (req, res) => {
             description: activePlan.description,
             price: activePlan.price,
             duration: activePlan.duration,
-            duration_unit: activePlan.duration_unit,
+            duration_unit: activePlan.duration_unit || activePlan.durationUnit,
             features: activePlan.features,
           } : null,
           plan_start_date: user.plan_start_date,
