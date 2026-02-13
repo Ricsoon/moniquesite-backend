@@ -6,14 +6,14 @@ const { pool } = require('../config/postgres');
  * @returns {Promise<Object>} OTP criado
  */
 const createOTP = async (otpData) => {
-  const { userEmail, userId, phone, code, expiresAt, maxAttempts = 5 } = otpData;
+  const { userEmail, userId, phone, code, expirationMinutes = 10, maxAttempts = 5 } = otpData;
 
   try {
     const result = await pool.query(
       `INSERT INTO otp_codes (user_email, user_id, phone, code, expires_at, verified, attempts, max_attempts)
-       VALUES ($1, $2, $3, $4, $5, false, 0, $6)
+       VALUES ($1, $2, $3, $4, NOW() + ($5 || ' minutes')::INTERVAL, false, 0, $6)
        RETURNING *`,
-      [userEmail, userId || null, phone, code, expiresAt, maxAttempts]
+      [userEmail, userId || null, phone, code, expirationMinutes, maxAttempts]
     );
 
     return result.rows[0];
@@ -64,8 +64,8 @@ const findLatestOTP = async (userEmail, phone, verified = false) => {
       [userEmail, phone, verified]
     );
 
-      return result.rows[0] || null;
-} catch (error) {
+    return result.rows[0] || null;
+  } catch (error) {
     console.error('Erro ao buscar OTP mais recente:', error);
     throw error;
   }
