@@ -55,6 +55,11 @@ const migrateAuthToPostgres = async () => {
       ADD COLUMN IF NOT EXISTS plan_end_date TIMESTAMP;
     `;
 
+    const addAsaasCustomerIdColumn = `
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS asaas_customer_id VARCHAR(255);
+    `;
+
     // Executar alterações
     await pool.query(addGoogleIdColumn);
     console.log('✅ Coluna google_id adicionada/verificada');
@@ -82,6 +87,9 @@ const migrateAuthToPostgres = async () => {
 
     await pool.query(addPlanEndDateColumn);
     console.log('✅ Coluna plan_end_date adicionada/verificada');
+
+    await pool.query(addAsaasCustomerIdColumn);
+    console.log('✅ Coluna asaas_customer_id adicionada/verificada');
 
     console.log('✅ Migração de autenticação para PostgreSQL concluída com sucesso!');
     process.exit(0);

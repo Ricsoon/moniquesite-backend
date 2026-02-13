@@ -157,9 +157,34 @@ router.post(
         });
       }
 
+      // Validar valores esperados dos planos
+      const expectedPrices = {
+        'Gratuito': 0,
+        'Pro': 50,
+        'Ilimitado': 200
+      };
+
+      if (expectedPrices[plan.name] !== undefined) {
+        const expectedPrice = expectedPrices[plan.name];
+        if (Math.abs(plan.price - expectedPrice) > 0.01) {
+          console.error(`⚠️ AVISO: Valor do plano "${plan.name}" (R$ ${plan.price}) não corresponde ao valor esperado (R$ ${expectedPrice})`);
+          // Não bloquear, apenas logar o aviso
+        }
+      }
+
+      console.log(`📋 Criando transação para plano: ${plan.name} (ID: ${plan.id}), Valor: R$ ${plan.price}`);
+
       // Criar ou atualizar cliente no Asaas
       let asaasCustomer;
       try {
+        console.log(`👤 Preparando dados do cliente para ASAAS:`, {
+          userId: user.id,
+          nome: user.nome ? '✓' : '✗',
+          email: user.email ? '✓' : '✗',
+          telefone: user.telefone ? '✓' : '✗',
+          asaasCustomerId: user.asaas_customer_id ? '✓' : '✗'
+        });
+
         asaasCustomer = await asaasService.createOrUpdateCustomer({
           asaasCustomerId: user.asaas_customer_id,
           name: user.nome,
@@ -175,6 +200,8 @@ router.post(
           state: user.state,
         });
 
+        console.log(`✅ Cliente ASAAS criado/atualizado com sucesso: ${asaasCustomer.id}`);
+
         // Salvar ID do cliente Asaas no usuário
         if (asaasCustomer.id && !user.asaas_customer_id) {
           // Atualizar campo asaas_customer_id no PostgreSQL
@@ -183,12 +210,13 @@ router.post(
             'UPDATE users SET asaas_customer_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
             [asaasCustomer.id, user.id]
           );
+          console.log(`💾 ID do cliente ASAAS salvo no usuário: ${asaasCustomer.id}`);
         }
       } catch (error) {
-        console.error('Erro ao criar cliente no Asaas:', error);
+        console.error('❌ Erro ao criar/atualizar cliente no ASAAS:', error.message);
         return res.status(500).json({
           success: false,
-          message: 'Erro ao criar cliente no sistema de pagamento',
+          message: error.message || 'Erro ao criar cliente no sistema de pagamento',
           error: error.message,
         });
       }
@@ -207,6 +235,16 @@ router.post(
       try {
         if (isRecurring && billingType !== 'PIX' && billingType !== 'BOLETO') {
           // Criar assinatura recorrente
+          // Validar valor antes de enviar para ASAAS
+          if (plan.price <= 0) {
+            return res.status(400).json({
+              success: false,
+              message: 'Plano gratuito não requer pagamento',
+            });
+          }
+
+          console.log(`💳 Criando assinatura ASAAS: Plano "${plan.name}", Valor: R$ ${plan.price}/mês, Tipo: ${billingType}`);
+          
           asaasSubscription = await asaasService.createSubscription({
             customerId: asaasCustomer.id,
             billingType: billingType,
@@ -218,11 +256,28 @@ router.post(
             creditCardToken: creditCardToken,
             creditCardHolderInfo: creditCardHolderInfo,
           });
+
+          // Validar valor retornado pela ASAAS
+          if (asaasSubscription.value && Math.abs(parseFloat(asaasSubscription.value) - plan.price) > 0.01) {
+            console.error(`⚠️ ERRO: Valor retornado pela ASAAS (R$ ${asaasSubscription.value}) não corresponde ao valor do plano (R$ ${plan.price})`);
+          } else {
+            console.log(`✅ Assinatura ASAAS criada com sucesso. ID: ${asaasSubscription.id}, Valor: R$ ${asaasSubscription.value}`);
+          }
         } else {
           // Criar pagamento único
           const dueDate = new Date();
           dueDate.setDate(dueDate.getDate() + 3); // Vencimento em 3 dias
 
+          // Validar valor antes de enviar para ASAAS
+          if (plan.price <= 0) {
+            return res.status(400).json({
+              success: false,
+              message: 'Plano gratuito não requer pagamento',
+            });
+          }
+
+          console.log(`💳 Criando pagamento ASAAS: Plano "${plan.name}", Valor: R$ ${plan.price}, Tipo: ${billingType}`);
+          
           asaasPayment = await asaasService.createPayment({
             customerId: asaasCustomer.id,
             billingType: billingType,
@@ -234,6 +289,13 @@ router.post(
             creditCardToken: creditCardToken,
             creditCardHolderInfo: creditCardHolderInfo,
           });
+
+          // Validar valor retornado pela ASAAS
+          if (asaasPayment.value && Math.abs(parseFloat(asaasPayment.value) - plan.price) > 0.01) {
+            console.error(`⚠️ ERRO: Valor retornado pela ASAAS (R$ ${asaasPayment.value}) não corresponde ao valor do plano (R$ ${plan.price})`);
+          } else {
+            console.log(`✅ Pagamento ASAAS criado com sucesso. ID: ${asaasPayment.id}, Valor: R$ ${asaasPayment.value}`);
+          }
 
           // Se for PIX, obter QR Code
           if (billingType === 'PIX' && asaasPayment.id) {

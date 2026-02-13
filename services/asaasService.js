@@ -16,55 +16,91 @@ const asaasClient = axios.create({
  */
 const createOrUpdateCustomer = async (userData) => {
   try {
+    // Validar dados obrigatórios
+    if (!userData.name || userData.name.trim() === '') {
+      throw new Error('Nome do cliente é obrigatório');
+    }
+    if (!userData.email || userData.email.trim() === '') {
+      throw new Error('Email do cliente é obrigatório');
+    }
+
+    // Preparar dados para envio
+    const customerData = {
+      name: userData.name.trim(),
+      email: userData.email.trim(),
+    };
+
+    // Adicionar dados opcionais se preenchidos
+    if (userData.phone && userData.phone.trim() !== '') {
+      customerData.phone = userData.phone.trim();
+    }
+    if (userData.cpfCnpj && userData.cpfCnpj.trim() !== '') {
+      customerData.cpfCnpj = userData.cpfCnpj.trim();
+    }
+    if (userData.postalCode && userData.postalCode.trim() !== '') {
+      customerData.postalCode = userData.postalCode.trim();
+    }
+    if (userData.address && userData.address.trim() !== '') {
+      customerData.address = userData.address.trim();
+    }
+    if (userData.addressNumber && userData.addressNumber.trim() !== '') {
+      customerData.addressNumber = userData.addressNumber.trim();
+    }
+    if (userData.complement && userData.complement.trim() !== '') {
+      customerData.complement = userData.complement.trim();
+    }
+    if (userData.province && userData.province.trim() !== '') {
+      customerData.province = userData.province.trim();
+    }
+    if (userData.city && userData.city.trim() !== '') {
+      customerData.city = userData.city.trim();
+    }
+    if (userData.state && userData.state.trim() !== '') {
+      customerData.state = userData.state.trim();
+    }
+
+    console.log('📧 Dados do cliente para ASAAS:', { name: customerData.name, email: customerData.email, hasPhone: !!customerData.phone });
+
     // Se já tem asaasCustomerId, tenta atualizar
     if (userData.asaasCustomerId) {
       try {
+        console.log(`🔄 Atualizando cliente existente no ASAAS: ${userData.asaasCustomerId}`);
         const response = await asaasClient.put(
           `/customers/${userData.asaasCustomerId}`,
-          {
-            name: userData.name,
-            email: userData.email,
-            phone: userData.phone || '',
-            cpfCnpj: userData.cpfCnpj || '',
-            postalCode: userData.postalCode || '',
-            address: userData.address || '',
-            addressNumber: userData.addressNumber || '',
-            complement: userData.complement || '',
-            province: userData.province || '',
-            city: userData.city || '',
-            state: userData.state || '',
-          }
+          customerData
         );
+        console.log('✅ Cliente atualizado com sucesso no ASAAS');
         return response.data;
       } catch (error) {
         // Se não encontrou, cria novo
         if (error.response?.status === 404) {
-          console.log('Cliente não encontrado no Asaas, criando novo...');
+          console.log('⚠️ Cliente não encontrado no Asaas, criando novo...');
         } else {
+          console.error('❌ Erro ao atualizar cliente:', error.response?.data || error.message);
           throw error;
         }
       }
     }
 
     // Criar novo cliente
-    const response = await asaasClient.post('/customers', {
-      name: userData.name,
-      email: userData.email,
-      phone: userData.phone || '',
-      cpfCnpj: userData.cpfCnpj || '',
-      postalCode: userData.postalCode || '',
-      address: userData.address || '',
-      addressNumber: userData.addressNumber || '',
-      complement: userData.complement || '',
-      province: userData.province || '',
-      city: userData.city || '',
-      state: userData.state || '',
-    });
+    console.log('➕ Criando novo cliente no ASAAS');
+    const response = await asaasClient.post('/customers', customerData);
+    console.log('✅ Cliente criado com sucesso no ASAAS:', response.data.id);
 
     return response.data;
   } catch (error) {
-    console.error('Erro ao criar/atualizar cliente no Asaas:', error.response?.data || error.message);
-    throw new Error(error.response?.data?.errors?.[0]?.description || 'Erro ao criar cliente no Asaas');
+    console.error('❌ Erro ao criar/atualizar cliente no Asaas:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    
+    // Extrair mensagem de erro do ASAAS
+    const asaasError = error.response?.data?.errors?.[0]?.description || 
+                       error.response?.data?.message ||
+                       error.message;
+    
+    throw new Error(`Erro ao criar cliente no sistema de pagamento: ${asaasError}`);
   }
 };
 
