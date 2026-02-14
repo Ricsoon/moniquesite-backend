@@ -138,6 +138,19 @@ router.post('/google/token', async (req, res) => {
       }
     }
 
+    // Buscar detalhes do plano ativo
+    let activePlan = null;
+    if (user && user.active_plan) {
+      try {
+        const planId = parseInt(user.active_plan);
+        if (!isNaN(planId)) {
+          activePlan = await planPostgresService.findPlanById(planId);
+        }
+      } catch (error) {
+        console.error('Erro ao buscar plano ativo:', error);
+      }
+    }
+
     // Gerar tokens JWT
     const accessToken = generateAccessToken(user.id);
     const refreshToken = generateRefreshToken(user.id);
@@ -153,7 +166,15 @@ router.post('/google/token', async (req, res) => {
           picture: user.picture,
           phone: user.telefone,
           role: user.role,
-          activePlan: user.active_plan,
+          activePlan: activePlan ? {
+            id: activePlan.id,
+            name: activePlan.name,
+            description: activePlan.description,
+            price: activePlan.price,
+            duration: activePlan.duration,
+            duration_unit: activePlan.duration_unit || activePlan.durationUnit,
+            features: activePlan.features,
+          } : null,
           planStartDate: user.plan_start_date,
           planEndDate: user.plan_end_date,
           credits: user.has_unlimited_credits ? 'unlimited' : user.credits,

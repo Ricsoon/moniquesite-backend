@@ -61,7 +61,7 @@ const createOrUpdateCustomer = async (userData) => {
 
     console.log('📧 Dados do cliente para ASAAS:', { name: customerData.name, email: customerData.email, hasPhone: !!customerData.phone });
 
-    // Se já tem asaasCustomerId, tenta atualizar
+    // Se já tem asaasCustomerId, tenta atualizar (mas continua se falhar com 404 ou 405)
     if (userData.asaasCustomerId) {
       try {
         console.log(`🔄 Atualizando cliente existente no ASAAS: ${userData.asaasCustomerId}`);
@@ -72,9 +72,9 @@ const createOrUpdateCustomer = async (userData) => {
         console.log('✅ Cliente atualizado com sucesso no ASAAS');
         return response.data;
       } catch (error) {
-        // Se não encontrou, cria novo
-        if (error.response?.status === 404) {
-          console.log('⚠️ Cliente não encontrado no Asaas, criando novo...');
+        // Se não encontrou (404) ou método não permitido (405), cria novo
+        if (error.response?.status === 404 || error.response?.status === 405) {
+          console.log(`⚠️ Cliente não pode ser atualizado (status: ${error.response?.status}), criando novo...`);
         } else {
           console.error('❌ Erro ao atualizar cliente:', error.response?.data || error.message);
           throw error;
