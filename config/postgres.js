@@ -56,6 +56,8 @@ const initializeTables = async () => {
         plan_start_date TIMESTAMP,
         plan_end_date TIMESTAMP,
         asaas_customer_id VARCHAR(255),
+        cpf_cnpj VARCHAR(20),
+        id_user_platform INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT users_identifier_check CHECK (n8n_user_id IS NOT NULL OR email IS NOT NULL)
@@ -210,9 +212,26 @@ const addAuthColumnsIfNeeded = async () => {
       ADD COLUMN IF NOT EXISTS plan_end_date TIMESTAMP
     `);
 
+    // Adicionar colunas para Asaas e CPF
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS asaas_customer_id VARCHAR(255)
+    `);
+
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS cpf_cnpj VARCHAR(20)
+    `);
+
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS id_user_platform INTEGER
+    `);
+
     // Criar índice para google_id
     await pool.query('CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_users_cpf_cnpj ON users(cpf_cnpj)');
 
     // Adicionar colunas para sincronização de planos (tabela plans)
     await pool.query(`
