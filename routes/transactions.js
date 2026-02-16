@@ -157,19 +157,10 @@ router.post(
         });
       }
 
-      // Validar valores esperados dos planos
-      const expectedPrices = {
-        'Gratuito': 0,
-        'Pro': 50,
-        'Ilimitado': 200
-      };
-
-      if (expectedPrices[plan.name] !== undefined) {
-        const expectedPrice = expectedPrices[plan.name];
-        if (Math.abs(plan.price - expectedPrice) > 0.01) {
-          console.error(`⚠️ AVISO: Valor do plano "${plan.name}" (R$ ${plan.price}) não corresponde ao valor esperado (R$ ${expectedPrice})`);
-          // Não bloquear, apenas logar o aviso
-        }
+      // Removi a validação de preços fixos pois agora os preços vêm do banco/API dinamicamente
+      if (plan.price > 0 && plan.price < 1) {
+        // Apenas um log de aviso para valores muito baixos, mas permitindo (ex: user testando 0.01)
+        console.log(`ℹ️ Processando transação com valor baixo: R$ ${plan.price}`);
       }
 
       console.log(`📋 Criando transação para plano: ${plan.name} (ID: ${plan.id}), Valor: R$ ${plan.price}`);
@@ -190,7 +181,7 @@ router.post(
           name: user.nome,
           email: user.email,
           phone: user.telefone,
-          cpfCnpj: user.cpfCnpj,
+          cpfCnpj: user.cpfCnpj || user.cpf_cnpj,
           postalCode: user.postalCode,
           address: user.address,
           addressNumber: user.addressNumber,
@@ -244,7 +235,7 @@ router.post(
           }
 
           console.log(`💳 Criando assinatura ASAAS: Plano "${plan.name}", Valor: R$ ${plan.price}/mês, Tipo: ${billingType}`);
-          
+
           asaasSubscription = await asaasService.createSubscription({
             customerId: asaasCustomer.id,
             billingType: billingType,
@@ -277,7 +268,7 @@ router.post(
           }
 
           console.log(`💳 Criando pagamento ASAAS: Plano "${plan.name}", Valor: R$ ${plan.price}, Tipo: ${billingType}`);
-          
+
           asaasPayment = await asaasService.createPayment({
             customerId: asaasCustomer.id,
             billingType: billingType,
@@ -325,9 +316,9 @@ router.post(
         plan: plan,
         amount: plan.price,
         paymentMethod: billingType === 'CREDIT_CARD' ? 'credit_card' :
-                       billingType === 'DEBIT_CARD' ? 'debit_card' :
-                       billingType === 'PIX' ? 'pix' :
-                       billingType === 'BOLETO' ? 'bank_transfer' : 'other',
+          billingType === 'DEBIT_CARD' ? 'debit_card' :
+            billingType === 'PIX' ? 'pix' :
+              billingType === 'BOLETO' ? 'bank_transfer' : 'other',
         status: 'pending',
         asaasCustomerId: asaasCustomer.id,
         asaasPaymentId: asaasPayment?.id || null,

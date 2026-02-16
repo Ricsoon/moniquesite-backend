@@ -74,6 +74,7 @@ router.get('/:id', authenticate, async (req, res) => {
       data: {
         user: {
           ...user,
+          cpfCnpj: user.cpf_cnpj, // Adicionar cpfCnpj mapeado
           active_plan: activePlan,
         }
       },
@@ -87,6 +88,76 @@ router.get('/:id', authenticate, async (req, res) => {
     });
   }
 });
+
+// @route   PUT /api/users/:id
+// @desc    Atualizar dados do usuário (nome, telefone, CPF/CNPJ)
+// @access  Private
+router.put(
+  '/:id',
+  authenticate,
+  [
+    body('nome').optional().trim(),
+    body('phone').optional().trim(),
+    body('cpfCnpj')
+      .optional()
+      .trim()
+      .custom((value) => {
+        if (!value) return true;
+        const cleanValue = value.replace(/\D/g, '');
+        if (cleanValue.length === 11 || cleanValue.length === 14) return true;
+        throw new Error('CPF deve ter 11 dígitos ou CNPJ deve ter 14 dígitos');
+      }),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      // Usuário pode atualizar apenas seus próprios dados, a menos que seja admin
+      if (req.user.id.toString() !== req.params.id && !req.user.is_admin) {
+        return res.status(403).json({
+          success: false,
+          message: 'Acesso negado',
+        });
+      }
+
+      const userId = parseInt(req.params.id);
+      const { nome, name, phone, cpfCnpj } = req.body;
+
+      // Normalizar telefone se fornecido
+      let telefone = undefined;
+      if (phone) {
+        telefone = normalizePhone(phone);
+      }
+
+      const updatedUser = await userPostgresService.updateUser(userId, {
+        nome: nome || name,
+        telefone,
+        cpfCnpj,
+      });
+
+      if (!updatedUser) {
+        return res.status(404).json({
+          success: false,
+          message: 'Usuário não encontrado',
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Usuário atualizado com sucesso',
+        data: {
+          user: updatedUser,
+        },
+      });
+    } catch (error) {
+      console.error('Erro ao atualizar usuário:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro ao atualizar usuário',
+        error: error.message,
+      });
+    }
+  }
+);
 
 // ==================== ROTAS WHATSAPP ====================
 

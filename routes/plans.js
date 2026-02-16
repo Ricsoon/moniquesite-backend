@@ -11,7 +11,7 @@ const validate = require('../middleware/validation');
 router.get('/', async (req, res) => {
   try {
     let isActive = true;
-    
+
     // Admin pode ver todos os planos
     if (req.query.all === 'true') {
       const auth = require('../middleware/auth');
@@ -31,7 +31,23 @@ router.get('/', async (req, res) => {
       }
     }
 
-    const result = await planPostgresService.listPlans({ 
+    // Sincronizar planos da API antes de listar
+    try {
+      const moniqueApiService = require('../services/moniqueApiService');
+      const apiPlans = await moniqueApiService.getPlans();
+
+      if (apiPlans && apiPlans.length > 0) {
+        console.log(`[PLANS] Sincronizando ${apiPlans.length} planos da API...`);
+        for (const apiPlan of apiPlans) {
+          await planPostgresService.syncPlanFromApi(apiPlan);
+        }
+      }
+    } catch (syncErr) {
+      console.error('[PLANS] Erro ao sincronizar planos:', syncErr.message);
+      // Não falhar o request, apenas logar
+    }
+
+    const result = await planPostgresService.listPlans({
       isActive,
       page: parseInt(req.query.page) || 1,
       limit: parseInt(req.query.limit) || 100,

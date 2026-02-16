@@ -165,6 +165,7 @@ router.post('/google/token', async (req, res) => {
           email: user.email,
           picture: user.picture,
           phone: user.telefone,
+          cpfCnpj: user.cpfCnpj || user.cpf_cnpj,
           role: user.role,
           activePlan: activePlan ? {
             id: activePlan.id,
@@ -308,6 +309,7 @@ router.get('/me', authenticate, async (req, res) => {
           email: user.email,
           picture: user.picture,
           phone: user.telefone,
+          cpfCnpj: user.cpfCnpj || user.cpf_cnpj,
           role: user.role,
           activePlan: activePlan ? {
             id: activePlan.id,

@@ -32,6 +32,36 @@ const getUserPlan = async (userId) => {
     }
 };
 
+/**
+ * Buscar lista de planos na API Monique
+ * @returns {Promise<Array>} Lista de planos ou array vazio
+ */
+const getPlans = async () => {
+    try {
+        const url = `${MONIQUE_API_URL}/planos`; // Endpoint informado pelo usuário
+        console.log(`[MONIQUE-API] Buscando planos: ${url}`);
+
+        const response = await axios.get(url, {
+            timeout: 10000,
+            headers: {
+                // 'Authorization': `Bearer ${MONIQUE_API_TOKEN}`, // Endpoint parece público segundo a doc, mas vou manter se necessário. Testei e deu 401, então PRECISA do token.
+                'Authorization': `Bearer ${MONIQUE_API_TOKEN}`,
+            },
+        });
+
+        console.log('[MONIQUE-API] Planos encontrados:', response.data.length);
+        return response.data;
+    } catch (error) {
+        console.error('[MONIQUE-API] Erro ao buscar planos:', {
+            status: error.response?.status,
+            message: error.message,
+            data: error.response?.data,
+        });
+        return [];
+    }
+};
+
 module.exports = {
     getUserPlan,
+    getPlans,
 };

@@ -1,5 +1,5 @@
 const express = require('express');
-const router = express.Router();
+const router = require('express').Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validation');
 const transactionPostgresService = require('../services/transactionPostgresService');
@@ -7,6 +7,7 @@ const planPostgresService = require('../services/planPostgresService');
 const externalCreditsService = require('../services/externalCreditsService');
 const { getPayment, getSubscription } = require('../services/asaasService');
 const userPostgresService = require('../services/userPostgresService');
+const calculatePlanDates = require('../utils/calculatePlanDates');
 
 /**
  * Webhook da Asaas para notificações de pagamentos
@@ -18,10 +19,10 @@ router.post('/asaas', async (req, res) => {
     const payment = req.body.payment;
     const subscription = req.body.subscription;
 
-    console.log('Webhook Asaas recebido:', { 
-      event, 
+    console.log('Webhook Asaas recebido:', {
+      event,
       paymentId: payment?.id,
-      subscriptionId: subscription?.id 
+      subscriptionId: subscription?.id
     });
 
     // Responder rapidamente para a Asaas
@@ -116,12 +117,12 @@ async function processWebhookEvent(event, paymentData) {
     if (event === 'PAYMENT_RECEIVED' || event === 'PAYMENT_CONFIRMED') {
       if (transaction.status === 'completed') {
         console.log(`Pagamento confirmado para transação ${transaction.id}. Atualizando plano e créditos na API externa.`);
-        
+
         try {
           // Buscar dados do usuário e plano
           let userId = transaction.user_id;
           let plan = transaction.plan;
-          
+
           // Se o plano não veio populado, buscar pelo plan_id
           if (!plan && transaction.plan_id) {
             plan = await planPostgresService.findPlanById(transaction.plan_id);
@@ -160,7 +161,7 @@ async function processWebhookEvent(event, paymentData) {
 
           // 1. Buscar planoId da API externa baseado no valor pago
           const externalPlanId = await externalCreditsService.getExternalPlanIdByAmount(transaction.amount);
-          
+
           if (!externalPlanId) {
             console.warn(`PlanoId não encontrado na API externa para valor ${transaction.amount}. Continuando sem atualizar plano.`);
           } else {
@@ -176,7 +177,20 @@ async function processWebhookEvent(event, paymentData) {
             console.log(`Plano ${plan.name} é ilimitado. Verificar se precisa de tratamento especial na API externa.`);
           }
 
-          console.log(`Processo de atualização de créditos concluído para transação ${transaction.id}`);
+          // 4. ATUALIZAR PLANO NO BANCO LOCAL (CORREÇÃO: O site local também deve saber que o plano mudou)
+          console.log(`Atualizando plano local para usuário ${userId}`);
+          const { startDate, endDate } = calculatePlanDates(plan.duration || 1, plan.durationUnit || 'months');
+
+          await userPostgresService.updateUserPlan(
+            userId,
+            plan.id,
+            startDate,
+            endDate,
+            plan.credits || 0,
+            plan.isUnlimited || false
+          );
+
+          console.log(`✅ Processo de atualização de créditos (local e externo) concluído para transação ${transaction.id}`);
         } catch (error) {
           console.error('Erro ao processar atualização de créditos na API externa:', error);
           // Não lançar erro para não quebrar o processamento do webhook

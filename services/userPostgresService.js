@@ -140,6 +140,61 @@ const createOrUpdateUser = async (userData) => {
 };
 
 /**
+ * Atualizar dados do usuário (nome, telefone, cpf_cnpj)
+ * @param {number} userId - ID do usuário
+ * @param {Object} updateData - Dados a atualizar
+ * @returns {Promise<Object>} Usuário atualizado
+ */
+const updateUser = async (userId, updateData) => {
+  try {
+    const { nome, telefone, cpfCnpj } = updateData;
+    const updates = [];
+    const values = [];
+    let paramCount = 1;
+
+    if (nome !== undefined) {
+      updates.push(`nome = $${paramCount++}`);
+      values.push(nome);
+    }
+    if (telefone !== undefined) {
+      updates.push(`telefone = $${paramCount++}`);
+      values.push(telefone);
+    }
+    if (cpfCnpj !== undefined) {
+      updates.push(`cpf_cnpj = $${paramCount++}`);
+      values.push(cpfCnpj.replace(/\D/g, '')); // Salvar apenas números
+    }
+
+    if (updates.length === 0) {
+      return findUserById(userId);
+    }
+
+    updates.push(`updated_at = CURRENT_TIMESTAMP`);
+    values.push(userId);
+
+    const query = `
+      UPDATE users 
+      SET ${updates.join(', ')}
+      WHERE id = $${paramCount}
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, values);
+
+    // Mapear cpf_cnpj de volta para cpfCnpj para compatibilidade com frontend/API
+    const user = result.rows[0];
+    if (user) {
+      user.cpfCnpj = user.cpf_cnpj;
+    }
+
+    return user;
+  } catch (error) {
+    console.error('Erro ao atualizar usuário:', error);
+    throw error;
+  }
+};
+
+/**
  * Buscar usuário por user_id
  * @param {string} userId - ID do usuário no N8N
  * @returns {Promise<Object|null>} Usuário encontrado ou null
@@ -391,5 +446,6 @@ module.exports = {
   updateUserCredits,
   updateUserCreditsUsed,
   updateUserPlan,
+  updateUser,
 };
 
