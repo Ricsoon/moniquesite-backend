@@ -37,6 +37,29 @@ const testConnection = async () => {
 // Criar tabelas se não existirem
 const initializeTables = async () => {
   try {
+    // Criar tabela de planos
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS plans (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) UNIQUE NOT NULL,
+        description TEXT,
+        price DECIMAL(10, 2) NOT NULL CHECK (price >= 0),
+        duration INTEGER NOT NULL CHECK (duration >= 1),
+        duration_unit VARCHAR(20) DEFAULT 'months' CHECK (duration_unit IN ('days', 'months', 'years')),
+        features TEXT[],
+        credits INTEGER CHECK (credits >= 0),
+        is_unlimited BOOLEAN DEFAULT false,
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Criar índices para plans
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_plans_name ON plans(name)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_plans_is_active ON plans(is_active)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_plans_price ON plans(price)');
+
     // Criar tabela de usuários
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -69,29 +92,6 @@ const initializeTables = async () => {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_users_telefone ON users(telefone)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)');
-
-    // Criar tabela de planos
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS plans (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255) UNIQUE NOT NULL,
-        description TEXT,
-        price DECIMAL(10, 2) NOT NULL CHECK (price >= 0),
-        duration INTEGER NOT NULL CHECK (duration >= 1),
-        duration_unit VARCHAR(20) DEFAULT 'months' CHECK (duration_unit IN ('days', 'months', 'years')),
-        features TEXT[],
-        credits INTEGER CHECK (credits >= 0),
-        is_unlimited BOOLEAN DEFAULT false,
-        is_active BOOLEAN DEFAULT true,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Criar índices para plans
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_plans_name ON plans(name)');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_plans_is_active ON plans(is_active)');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_plans_price ON plans(price)');
 
     // Criar tabela de transações
     await pool.query(`
